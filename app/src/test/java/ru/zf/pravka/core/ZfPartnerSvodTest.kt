@@ -77,33 +77,5 @@ class ZfPartnerSvodTest {
         assertFalse(ZfPartner.inProfit(papa, rules))
     }
 
-    @Test
-    fun `числа «Денег» — точные со временем, своё — при расхождении больше рубля`() {
-        val s = MoneySummary.parse(
-            JSONObject().put("partner", JSONObject().put("debt", 9_100_000).put("pct", 30))
-                .put("networth_kop", 123_400_000).put("at", "2026-10-06T14:05:00+03:00").put("journal_at", "2026-10-06T14:00:00+03:00")
-        )!!
-        assertEquals(9_100_000L, s.debtKop)
-        assertEquals(123_400_000L, s.networthKop)
-        assertTrue(MoneySummary.fresh(s, s.atMs + 3_600_000L))
-        assertFalse("старше суток — прикидка телефона", MoneySummary.fresh(s, s.atMs + 25 * 3_600_000L))
-        assertFalse(MoneySummary.fresh(null, s.atMs))
-        assertFalse(MoneySummary.diverges(-9_100_050L, s))
-        assertTrue(MoneySummary.diverges(-9_000_000L, s))
-        assertNull(MoneySummary.parse(JSONObject().put("partner", JSONObject())))
-    }
 
-    @Test
-    fun `время «Денег» — и с двоеточием в поясе, и без (аудит №75)`() {
-        val colon = MoneySummary.atMs("2026-10-06T14:05:00+03:00")!!
-        // Так «Деньги» писали до 15.10 — strftime("%z"); телефон не разбирал, и число не доходило ни разу.
-        assertEquals(colon, MoneySummary.atMs("2026-10-06T14:05:00+0300"))
-        assertEquals(colon, MoneySummary.atMs("2026-10-06T11:05:00Z"))
-        assertEquals(colon - 4 * 3_600_000L - 30 * 60_000L, MoneySummary.atMs("2026-10-06T14:05:00+0730"))
-        val s = MoneySummary.parse(JSONObject().put("partner", JSONObject().put("debt", 5_000)).put("at", "2026-10-06T14:05:00+0300"))!!
-        assertEquals(5_000L, s.debtKop)
-        assertEquals(colon, s.atMs)
-        assertNull(MoneySummary.atMs("вчера"))
-        assertNull(MoneySummary.parse(JSONObject().put("at", "2026-10-06 14:05")))
-    }
 }

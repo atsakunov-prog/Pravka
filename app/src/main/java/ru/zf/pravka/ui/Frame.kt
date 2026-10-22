@@ -191,31 +191,6 @@ class KovchegHost(
 
 val LocalKovcheg = compositionLocalOf<KovchegHost?> { null }
 
-/** Значок действия в шапке — 22 dp в цели 44, без капсулы. */
-@Composable
-fun HeaderAction(icon: ImageVector, description: String, onClick: () -> Unit, tint: Color? = null) =
-    HeaderIcon(icon, description, onClick, tint)
-
-/** «$» — стоимость Claude (attach_money, DESIGN §9). */
-@Composable
-fun CostAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Dollar, "стоимость Claude", onClick)
-
-/** Шестерёнка: настройки именно этого режима. */
-@Composable
-fun SettingsAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Gear, "настройки режима", onClick)
-
-/** Статистика — Общая статистика (donut_small, DESIGN §9). */
-@Composable
-fun StatsAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Stats, "статистика", onClick)
-
-/** Выгрузка: стрелка из лотка. */
-@Composable
-fun ExportAction(onClick: () -> Unit) = HeaderIcon(Glyphs.Export, "выгрузка", onClick)
-
-// ---------------------------------------------------------------------------
-// Край ленты под шапкой
-// ---------------------------------------------------------------------------
-
 /**
  * Сколько ленты растворяется у верхнего края, когда её листают, dp. Владелец
  * (27.09.2026): «когда я листаю вниз приложение, то там наверху тогда резкая
@@ -270,30 +245,6 @@ private fun Modifier.scrollFade(scrolled: () -> Float): Modifier = this
                 endY = fade,
             ),
             size = Size(size.width, fade),
-            blendMode = BlendMode.DstIn,
-        )
-    }
-
-/**
- * Низ ленты тает под строкой «сказать» (DESIGN §10, маски макетов: лента
- * сходит в прозрачность над строкой): последние [fade] dp перед зоной
- * строки [bar] — в прозрачность, сама зона — пустая. Буфер слоя — только
- * ради маски `DstIn`.
- */
-fun Modifier.bottomFade(bar: androidx.compose.ui.unit.Dp = 80.dp, fade: androidx.compose.ui.unit.Dp = 36.dp): Modifier = this
-    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-    .drawWithContent {
-        drawContent()
-        val b = bar.toPx()
-        val f = fade.toPx()
-        val h = size.height
-        drawRect(
-            Brush.verticalGradient(
-                0f to Color.Black,
-                ((h - b - f) / h).coerceIn(0f, 1f) to Color.Black,
-                ((h - b) / h).coerceIn(0f, 1f) to Color.Transparent,
-                1f to Color.Transparent,
-            ),
             blendMode = BlendMode.DstIn,
         )
     }

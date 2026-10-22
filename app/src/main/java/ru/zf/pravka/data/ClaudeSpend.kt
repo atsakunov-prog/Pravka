@@ -239,7 +239,10 @@ internal class ClaudeSpend(private val app: PravkaApp, private val scope: Corout
 
     private fun src(): String {
         val name = android.os.Build.MODEL.orEmpty().ifBlank { "телефон" }
-        return "$name · ${app.moneyCloudSync.device.take(6)}".take(64)
+        // Номер телефона в книге — тот же, что был у обмена Денег через облако (снят 22.10.2026): файл в секретах
+        // установки остался, и книга трат не видит «нового» телефона.
+        val id = runCatching { java.io.File(DataRoot.secrets(app), "money-sync-device.txt").readText().trim() }.getOrNull().orEmpty()
+        return "$name · ${id.take(6)}".take(64)
     }
 
     private fun ensureLoaded() {

@@ -30,7 +30,6 @@ import ru.zf.pravka.data.ArchiveSync.Domain as ArchiveDomain
 import android.os.SystemClock
 import java.io.File
 import ru.zf.pravka.provider.ClaudeProvider
-import ru.zf.pravka.provider.DictMiner
 import ru.zf.pravka.provider.WhisperProvider
 import ru.zf.pravka.target.ClipboardTarget
 
@@ -102,10 +101,6 @@ class PravkaApp : Application() {
                 ru.zf.pravka.ui.CategoryWorth.byName = cats.associate { it.name.trim().lowercase() to it.value }
             }
         }
-        // Тейк ушёл с молчащего облака на пакет — сбой связи «в деле», в журнал связи.
-        ru.zf.pravka.provider.GoogleSpeechSession.cloudEventSink = { why ->
-            netProber.live(ru.zf.pravka.core.NetProbe.Target.GOOGLE, why)
-        }
         // Сколько служба речи Google работала на Правку — тейки, переразбор, прогрев.
         ru.zf.pravka.provider.GoogleSpeechSession.useSink = { kind, ms -> speechUse.add(kind, ms) }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
@@ -129,11 +124,6 @@ class PravkaApp : Application() {
         appScope.launch { runCatching { settings.retireOldWakeDeal() } }
         // Правка на диете (22.10.2026): «Д» со стекла и ночной разбор — один раз.
         appScope.launch { runCatching { settings.slimOnce() } }
-        // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
-        // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
-        // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
-        // приложении нет живого прогона, гасится.
-        appScope.launch { runCatching { ru.zf.pravka.core.NightSweep.onStart(this@PravkaApp) } }
         // Переразбор истории (core/HistoryFixes.kt): правка разбора, пришедшая
         // с этой сборкой, один раз проходит по накопленному и выводит его заново
         // из сырья — вчерашний пуш не остаётся вчерашним разбором.
@@ -407,17 +397,9 @@ class PravkaApp : Application() {
     val editWatch by lazy { ru.zf.pravka.data.EditWatchStore(this) }
     /** Журнал правок руками: надиктовано → модель → владелец, навсегда. */
     val corrections by lazy { ru.zf.pravka.data.CorrectionsLog(this) }
-    val evalStore by lazy { ru.zf.pravka.data.EvalStore(this) }
     val claudeProvider by lazy {
         ClaudeProvider(settings, promptStore, httpClient, rulesStore).also { p ->
-            p.transportLog = { line ->
-                eventLog.add(line)
-                // Не достучались или соединение умерло молча — это сбой связи «в деле»:
-                // в журнал связи и меткой на полосе Claude (`NetProber.live`).
-                if (line.contains("не достучались") || line.contains("соединение мёртвое")) {
-                    netProber.live(ru.zf.pravka.core.NetProbe.Target.CLAUDE, line.removePrefix("claude: "))
-                }
-            }
+            p.transportLog = { line -> eventLog.add(line) }
             p.author = {
                 profileStore.current?.let { ru.zf.pravka.core.Prompts.Author(it.name, it.female, it.owner) }
                     ?: ru.zf.pravka.core.Prompts.Author.OWNER
@@ -426,7 +408,6 @@ class PravkaApp : Application() {
     }
     // Ночной разбор: батчи Anthropic, память прогонов и движок (core/NightReview.kt).
     val claudeBatches by lazy { ru.zf.pravka.provider.ClaudeBatches(settings, httpClient) }
-    val nightReviewStore by lazy { ru.zf.pravka.data.NightReviewStore(this) }
     /**
      * Единый журнал ночных автоматов (17.09.2026; владелец: «единый лог,
      * который будет показывать, что работает, что нет»): разбор, тень, правка
@@ -434,29 +415,6 @@ class PravkaApp : Application() {
      * «Разборах» и уходит в лог для Claude Code.
      */
     val nightLog by lazy { EventLog(this, "night.log") }
-    /** Когда служба последний раз запускала ночные тики: нет тика двадцать минут — автоматы стоят, табло скажет. */
-    @Volatile var lastNightTickMs: Long = 0L
-    val nightReview by lazy {
-        ru.zf.pravka.core.NightReview(
-            settings, claudeBatches, nightReviewStore, dictionaryStore, rulesStore, historyLog,
-            transcriptionLog, corrections, promptStore, stats, nightLog,
-        )
-    }
-    // Недельная правка промпта: идеи недели → предложение → измерение → принять или нет (core/PromptTuner.kt).
-    val promptVersions by lazy { ru.zf.pravka.data.PromptVersions(this) }
-    val promptTuner by lazy {
-        ru.zf.pravka.core.PromptTuner(
-            settings, claudeBatches, nightReviewStore, promptVersions, promptStore, historyLog, corrections,
-            DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
-        )
-    }
-    // Ручное сравнение трёх моделей (Сонет · Опус · Опус low) на диктовках периода — только кнопкой (core/ModelCompare.kt).
-    val modelCompare by lazy {
-        ru.zf.pravka.core.ModelCompare(
-            settings, claudeBatches, nightReviewStore, historyLog, DictionaryApplier(dictionaryStore), claudeProvider, stats, nightLog,
-        )
-    }
-    val dictMiner by lazy { DictMiner(settings, httpClient, stats) }
     val whisperProvider by lazy { WhisperProvider(this, settings) }
     val recordings by lazy { Recordings(this) }
     /** Звук тейков Google — переразобрать фразу заново (30.09.2026). */
@@ -555,11 +513,6 @@ class PravkaApp : Application() {
         )
     }
 
-    /**
-     * Настройки телефона на сервере Дел (14.10.2026, docs/phone-settings-server.md): снимок настроек — на
-     * страницу «Телефон» в вебе, правки оттуда — сюда, тем же путём, что тумблер. Какие настройки — `PhoneKnobs.kt`.
-     */
-    internal val phoneRemote by lazy { ru.zf.pravka.data.PhoneRemoteSync(this, appScope) { eventLog.add(it) } }
     /** Книга трат Claude телефона и её дорога в общую книгу на сервере Дел (14.10.2026, `data/ClaudeSpend.kt`). */
     internal val claudeSpend by lazy { ru.zf.pravka.data.ClaudeSpend(this, appScope) { eventLog.add(it) } }
 
@@ -740,10 +693,8 @@ class PravkaApp : Application() {
                 }
             },
             keepImport = { bytes -> importArchive.keep(bytes) },
-            // Общие Деньги на чужом телефоне: справочник только заполняет пустые
-            // категории — у телефонов разные справочники, и иначе каждый обмен
-            // переписывал бы категории другого (`MoneyMatch.run`, 08.10.2026).
-            fillOnly = { !profileStore.owner && moneyCloudSync.ready() },
+            // Общих Денег через облако больше нет (22.10.2026): справочник телефона — свой, переписывает сам.
+            fillOnly = { false },
         )
     }
 
@@ -767,45 +718,13 @@ class PravkaApp : Application() {
     }
     internal val homeServer by lazy { ru.zf.pravka.data.HomeServer(this, ru.zf.pravka.provider.WebDav(webdavHttp)) }
 
-    /** Проверка связи с облаками: журнал строками, замеры для картинки, сам проверяющий. */
-    val netLog by lazy { EventLog(this, "net.log") }
-    val netProbeStore by lazy { ru.zf.pravka.data.NetProbeStore(this) }
-    internal val netProber by lazy { ru.zf.pravka.provider.NetProber(this, settings, netProbeStore, homeServer, netLog) }
     /** Счёт службы речи Google по суткам: сколько она работала на Правку (`core/SpeechUse.kt`). */
     val speechUse by lazy { ru.zf.pravka.data.SpeechUseStore(this) }
 
     /** Облако семьи: домашний сервер, если задан; нет — null, обмен и копии молчат. */
     fun familyCloud(): ru.zf.pravka.provider.FamilyCloud? = homeServer.saved.value?.let { homeServer.cloud }
 
-    internal val moneyCloudSync by lazy {
-        ru.zf.pravka.data.MoneyCloudSync(
-            context = this,
-            store = moneyStore,
-            cloud = { familyCloud() },
-            profile = { profileStore.current },
-            reconcile = { moneyEngine.reconcile() },
-            log = { eventLog.add(it) },
-        )
-    }
 
-    /**
-     * «Где мы» (docs/gde.md): точки семьи на карте через сервер Дел — тот же
-     * вход по QR, что у вкладки «Дела». Имя телефона — то же, что в журналах
-     * Денег; место по Wi-Fi — у автопилота Засечки, пока служба жива.
-     */
-    internal val locator by lazy { ru.zf.pravka.provider.Locator(this) }
-    internal val where by lazy {
-        ru.zf.pravka.data.WhereSync(
-            context = this,
-            locator = locator,
-            dela = { delaSync.takeIf { it.link.value != null } },
-            profile = { profileStore.current },
-            device = { moneyCloudSync.device },
-            place = { runCatching { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.placeNow() }.getOrNull().orEmpty() },
-            scope = appScope,
-            log = { eventLog.add(it) },
-        )
-    }
 
     /**
      * Архив на домашнем компе (data/ArchiveSync.kt, docs/arkhiv.md): каждый
@@ -902,9 +821,7 @@ class PravkaApp : Application() {
                 ArchiveDomain.PRAVKA ->
                     corrections.all().map {
                         ev.correction(it.id, it.ts, it.pkg, it.dictated, it.cleaned, it.edited, it.result, clock)
-                    } +
-                        // Баги и предложения — чтобы ежедневный разбор читал их с компа.
-                        feedbackStore.all().map { ev.feedback(it, clock) }
+                    }
             }
         }
     }
@@ -969,19 +886,6 @@ class PravkaApp : Application() {
             icu = icuSportSync,
             zasechkaStore = zasechkaStore,
             offf = openFoodFacts,
-            settings = settings,
-            stats = stats,
-            eventLog = eventLog,
-        )
-    }
-    val sportCoach by lazy {
-        ru.zf.pravka.core.SportCoach(
-            claude = claudeProvider,
-            store = sportStore,
-            foodStore = foodStore,
-            planStore = planStore,
-            strengthStore = strengthStore,
-            zasechkaStore = zasechkaStore,
             settings = settings,
             stats = stats,
             eventLog = eventLog,
@@ -1056,11 +960,7 @@ class PravkaApp : Application() {
     // day; only сон crosses into the ribbon via the sweeper.
     val phoneStore by lazy { ru.zf.pravka.data.PhoneStore(this) }
 
-    /** Погода для «Сегодня» (Правка 4.0): Open-Meteo, кэш час. */
-    val weatherStore by lazy { ru.zf.pravka.data.WeatherStore(this) }
 
-    /** Баги и предложения с кнопок (07.10.2026, `docs/feedback.md`). */
-    val feedbackStore by lazy { ru.zf.pravka.data.FeedbackStore(this) }
     val phoneSweeper by lazy {
         ru.zf.pravka.data.PhoneSweeper(
             this, phoneStore, zasechkaStore, settings, eventLog,
@@ -1074,23 +974,6 @@ class PravkaApp : Application() {
         )
     }
 
-    /**
-     * Телефон в ленте (13.10.2026, `core/PhoneSit.kt`): долгое сидение в
-     * телефоне — Сонету и врезкой в ленту. Снимки экрана кладёт служба
-     * (`trigger/ScreenPeek.kt`), только в память.
-     */
-    val phoneSit by lazy {
-        ru.zf.pravka.data.PhoneSitEngine(
-            this, zasechkaStore, phoneStore, settings, stats, eventLog,
-            claude = { claudeProvider },
-            on = { zPhoneSitFlow.first() && !zQuietFlow.first() },
-            witness = { ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.autoWitness() },
-            people = { phoneSitPeople() },
-            ask = { question, detail, yes, no ->
-                ru.zf.pravka.trigger.PravkaAccessibilityService.instance?.zButton?.showYesNo(question, detail, yes, no) == true
-            },
-        )
-    }
 
     /**
      * Свои люди для «Телефона в ленте»: семья — строкой из автопилота, как у

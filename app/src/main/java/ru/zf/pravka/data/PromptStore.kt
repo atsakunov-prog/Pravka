@@ -183,33 +183,3 @@ class PromptStore(private val context: Context) {
         const val TEAM_FALLBACK = "Наташа, Алёна, Арина, Лена, папа Сергей"
     }
 }
-
-/**
- * Набор промптов одним файлом — чтобы отдать свои промпты другой установке
- * (владелец, 25.09.2026: Марианне «промпты надо дать мои»). Свои тексты
- * владельца — те, что он правил руками и что приняла недельная правка
- * промпта, — живут только в его базе; заводские у всех одни, из APK, поэтому
- * в набор не едут. Род и «без прозы» у получателя накладываются при сборке
- * запроса (`Prompts.forAuthor`, `Prompts.speakerNote`), а не в тексте.
- */
-internal object PromptSet {
-    const val FORMAT = "pravka-prompts"
-
-    fun encode(from: String, texts: Map<String, String>, now: Long): String =
-        org.json.JSONObject()
-            .put("format", FORMAT)
-            .put("version", 1)
-            .put("from", from)
-            .put("exportedAt", now)
-            .put("prompts", org.json.JSONObject().also { o -> texts.forEach { (k, v) -> o.put(k, v) } })
-            .toString(2)
-
-    /** Тексты набора: ключ промпта — текст. Не наш файл — исключение с понятным текстом. */
-    fun decode(text: String): Pair<String, Map<String, String>> {
-        val o = org.json.JSONObject(text)
-        require(o.optString("format") == FORMAT) { "это не набор промптов Правки" }
-        val p = o.optJSONObject("prompts") ?: org.json.JSONObject()
-        val map = p.keys().asSequence().associateWith { p.getString(it) }
-        return o.optString("from") to map
-    }
-}

@@ -166,40 +166,6 @@ private fun grainBitmap(): ImageBitmap {
 }
 
 /**
- * Лицо клавиши: заливка [color], блик по верхней трети, мягкая тень снизу и
- * фаска — те же три слоя, что у кнопок на стекле (`trigger/BubbleSkin.kt`).
- * [lit] = false — клавиша под пальцем: свет с неё соскользнул, тень осталась.
- */
-fun Modifier.keyFace(color: Color, shape: Shape, lit: Boolean = true): Modifier {
-    val sheen = CardLook.KEY_SHEEN * if (lit) 1f else CardLook.KEY_PRESSED_LIGHT
-    return this
-        .clip(shape)
-        .background(color)
-        .background(
-            Brush.verticalGradient(
-                0f to Color.White.copy(alpha = sheen),
-                CardLook.KEY_SHEEN_SPAN * 0.55f to Color.White.copy(alpha = sheen * 0.3f),
-                CardLook.KEY_SHEEN_SPAN to Color.Transparent,
-            )
-        )
-        .background(
-            Brush.verticalGradient(
-                1f - CardLook.KEY_FOOT_SPAN to Color.Transparent,
-                1f to Color.Black.copy(alpha = CardLook.KEY_FOOT),
-            )
-        )
-        .border(
-            1.dp,
-            Brush.verticalGradient(
-                0f to Color.White.copy(alpha = CardLook.KEY_RIM_LIGHT * if (lit) 1f else CardLook.KEY_PRESSED_LIGHT),
-                0.5f to Color.Transparent,
-                1f to Color.Black.copy(alpha = CardLook.KEY_RIM_SHADE),
-            ),
-            shape,
-        )
-}
-
-/**
  * Стекло плашки во вкладке режима (третий заход, 27.09.2026). Владелец, со
  * снимками: «что-то с плашками внутри приложения надо сделать», а про кнопки
  * на стекле и пилюлю — «они там прямо классные». Прежняя плашка — ровный

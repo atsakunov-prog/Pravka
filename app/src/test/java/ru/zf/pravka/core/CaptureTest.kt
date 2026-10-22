@@ -194,18 +194,6 @@ class CaptureTest {
 
     // ------------------------------------------------------------ развилка и промпт
 
-    @Test
-    fun `правило сильнее Сонета`() {
-        val tasks = SayFork.Route(SayFork.Kind.TASKS, "x")
-        val entry = SayFork.Route(SayFork.Kind.ENTRY, "x")
-        // Правило узнало — что бы ни сказал Сонет.
-        assertEquals(SayFork.Way.RULE, SayFork.captureWay(true, entry, modelOn = true))
-        assertEquals(SayFork.Way.RULE, SayFork.captureWay(true, null, modelOn = false))
-        // Не узнало: «дела» — к серверу (модель там) или прежней Разноской; лента — лентой.
-        assertEquals(SayFork.Way.SERVER, SayFork.captureWay(false, tasks, modelOn = true))
-        assertEquals(SayFork.Way.PHONE, SayFork.captureWay(false, tasks, modelOn = false))
-        assertEquals(SayFork.Way.ROUTE, SayFork.captureWay(false, entry, modelOn = true))
-    }
 
     @Test
     fun `дорога захвата — в развилку один раз, перед временем`() {
@@ -219,21 +207,4 @@ class CaptureTest {
         assertTrue(PromptsZasechka.withCapture("правила").endsWith(PromptsZasechka.CAPTURE_ROAD))
     }
 
-    @Test
-    fun `страница куда что — из APK, все живые фразы`() {
-        val text = SharedPrompts.read(KudaChto.FILE)
-        val blocks = KudaChto.blocks(text)
-        val rows = blocks.filterIsInstance<KudaChto.Block.Row>()
-        val says = rows.map { it.cells.first() }
-        for (phrase in listOf("напомни в 12 в Контуре отправить счёт", "напомни, когда приеду домой, позвонить маме",
-            "позвонить Ивану на неделе", "идея: предложить Ромашке косткаттинг", "Иван сказал, бюджет будет в январе", "позвонил Ольге")) {
-            assertTrue(phrase, says.any { it.contains(phrase) })
-        }
-        assertTrue(rows.all { it.names.size == it.cells.size })
-        // Одна страница (16.10): что сказать — куда ляжет — что увидишь — когда вернётся — как поправить.
-        assertEquals(listOf("Что сказать", "Куда ляжет", "Что увидишь", "Когда вернётся", "Как поправить"), rows.first().names)
-        assertEquals("Куда что", (blocks.first() as KudaChto.Block.Head).text)
-        assertEquals(listOf("а " to false, "жирно" to true, " б" to false), KudaChto.spans("а **жирно** б"))
-        assertNotNull(blocks.filterIsInstance<KudaChto.Block.Para>().firstOrNull { it.text.contains("Календарь — только встречи") })
-    }
 }

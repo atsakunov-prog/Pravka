@@ -121,10 +121,6 @@ class ArchiveEventsTest {
             ArchiveEvents.pravkaClean(clean, clock)!!,
             ArchiveEvents.correction(5, t0, "org.telegram", "сказал", "модель", "итог", "dict", clock),
             ArchiveEvents.journal(listOf("09-07 07:30:01.120  гарнитура: команда голоса пришла"), clock, t0).single(),
-            ArchiveEvents.feedback(
-                ru.zf.pravka.data.FeedbackStore.Item(7, t0, "Д", "подпись обрезается", "Подпись обрезается.", "3.0.787"),
-                clock,
-            ),
             ArchiveEvents.talk(SportStore.Talk(11, t0, "как форма?", "ровно", 0.02), clock),
         )
     }
@@ -176,7 +172,10 @@ class ArchiveEventsTest {
     fun `каждый вид телефона — ровно форма контракта`() {
         val c = contract()
         val made = samples()
-        assertEquals("видов в контракте и у телефона", c.keys.sorted(), made.map { it.kind }.distinct().sorted())
+        // Виды, которые телефон больше не шлёт, а сервер по-прежнему принимает и хранит прошлые записи
+        // (Правка на диете, 22.10.2026: баги с кнопок сняты) — в контракте остаются, у телефона их нет.
+        val retired = setOf("pravka.feedback")
+        assertEquals("видов в контракте и у телефона", (c.keys - retired).sorted(), made.map { it.kind }.distinct().sorted())
         for (u in made) {
             assertEquals("ключи вида ${u.kind}", shape(c.getValue(u.kind)), shape(u.data))
         }

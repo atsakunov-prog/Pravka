@@ -38,8 +38,6 @@ import org.json.JSONObject
 import ru.zf.pravka.core.Dela
 import ru.zf.pravka.core.DelaAsk
 import ru.zf.pravka.trigger.PravkaAccessibilityService
-import ru.zf.pravka.trigger.finishDelaReason
-import ru.zf.pravka.trigger.listenForDelaReason
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.GlyphButton
 import ru.zf.pravka.ui.Glyphs
@@ -50,21 +48,12 @@ import ru.zf.pravka.ui.PaperHint
 import ru.zf.pravka.ui.PaperSheet
 import ru.zf.pravka.ui.PaperTextButton
 import ru.zf.pravka.ui.RowRule
-import ru.zf.pravka.ui.ThinkingLine
 
 // Правка дел словами (05.10.2026, docs/dela-phone-2.md, этап 1, пункт 3):
 // микрофон у дела и строка «Claude» над экраном вида. Делает сервер
 // (`/api/ask`) — так же, как веб, с моделью и глубиной из настроек человека;
 // телефон собирает, что на экране, ждёт задание и показывает итог с «Вернуть
 // всё». Без сети команда не уходит — и текст остаётся в поле.
-
-/** Что видит Claude с этого экрана: название и дела в порядке показа. */
-internal data class AskScreen(
-    val title: String,
-    val scope: JSONObject,
-    /** Карточка клиента, сделки или человека: Claude (Opus) видит её целиком и правит не только дела. */
-    val card: Boolean = false,
-)
 
 /**
  * Разговор с Claude (09.10.2026, docs/dela-phone-9.md, п. 12; владелец: «он
@@ -79,17 +68,6 @@ internal data class Talk(
     val text: String = "",
     val error: String = "",
 )
-
-/** Одна команда за раз на всю вкладку — из строки Claude внизу ([ASK_SCREEN]). */
-internal class AskState {
-    var running by mutableStateOf("")
-    var errors by mutableStateOf(mapOf<String, String>())
-    var talk by mutableStateOf<Talk?>(null)
-
-    fun error(key: String): String = errors[key].orEmpty()
-}
-
-internal const val ASK_SCREEN = "screen"
 
 /**
  * Что сейчас в окне (08.10.2026, docs/dela-phone-7.md, `pageScope` веба):
@@ -128,221 +106,6 @@ internal fun Modifier.seen(key: String): Modifier {
     })
 }
 
-/**
- * Строка Claude внизу — одна на всю вкладку (08–09.10.2026, docs/dela-phone-7.md,
- * поправки задания 10): микрофон слева — нажал, говоришь сколько угодно, нажал
- * ещё раз — текст в поле, отдаёт владелец стрелкой справа (16.10.2026, запись 12;
- * пока поле пусто — стрелка приглушена). Пока
- * Claude думает — команда серым в поле и заливка слева направо, ничего не
- * вращается. Подпись над полем внутри стекла — только по делу: открытое дело
- * («Скажи, что сделать с делом «…»» и «Для этого» за ним), «слушаю», «думает».
- * Строк «что видит Claude» нет (отладка 16.10.2026, запись 17: «почему Claude видит
- * экран и открытое дело — это вообще надо отовсюду убрать»): ни «…с делами на
- * экране», ни «с карточкой · Opus · видит карточку». Что видит Claude, не
- * поменялось — экран и открытое дело уходят в `scope`, как раньше.
- */
-@Composable
-internal fun DelaSayBar(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    listening: Boolean,
-    busy: Boolean,
-    note: String,
-    noteError: Boolean,
-    onMic: () -> Unit,
-    onSend: () -> Unit,
-    modifier: Modifier = Modifier,
-    /**
-     * «Для этого» у открытого дела (15.10.2026, docs/dela-phone-23.md, `cardSay` веба): null — чипа нет (дело не
-     * открыто, сервер без фичи nest), true — всё сказанное станет делами внутри открытого, false — обычная строка.
-     */
-    step: Boolean? = null,
-    onStep: () -> Unit = {},
-    /** Название открытого дела — в подписи «Для «…»: …», когда чип включён. */
-    taskTitle: String? = null,
-) {
-    val mode = ru.zf.pravka.ui.LocalMode.current
-    val ty = ru.zf.pravka.ui.LocalPravkaType.current
-    // Заливка «Claude думает»: растёт к краю, но не доходит — без крутилки и пульса.
-    var progress by remember { mutableStateOf(0f) }
-    androidx.compose.runtime.LaunchedEffect(busy) {
-        progress = 0f
-        val start = System.currentTimeMillis()
-        while (busy) {
-            val sec = (System.currentTimeMillis() - start) / 1000f
-            progress = 1f - kotlin.math.exp(-sec / 8f) * 0.95f
-            kotlinx.coroutines.delay(200)
-        }
-    }
-    val shape = RoundedCornerShape(31.dp)
-    Column(modifier.fillMaxWidth(), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)) {
-        val task = taskTitle?.takeIf { it.isNotBlank() }?.take(60)
-        val head = when {
-            listening -> "Слушаю — говори сколько нужно. Нажми микрофон ещё раз — текст встанет в поле"
-            busy -> "Claude думает… Можно уходить на другие разделы — изменения появятся сами"
-            step == true -> (task?.let { "Для «$it»" } ?: "Для этого") + ": что назовёшь — заведу делами внутри"
-            task != null -> "Скажи, что сделать с делом «$task»"
-            else -> null
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(min = 62.dp)
-                .glass(shape, mode.glass.copy(inkAlpha = maxOf(mode.glass.inkAlpha, 0.9f)))
-                .clip(shape)
-                .drawBehind {
-                    if (busy) drawRect(mode.tint.copy(alpha = 0.25f), size = androidx.compose.ui.geometry.Size(size.width * progress, size.height))
-                }
-                .padding(horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // «Стоп» — в цвете Дел, без красного: это «готово», а не тревога.
-            GlyphButton(
-                if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "готово — текст в поле" else "сказать голосом: нажми, говори, нажми ещё раз",
-                onClick = onMic,
-                tint = if (listening) mode.value else mode.label,
-                size = 46.dp,
-                enabled = !busy,
-            )
-            // Над полем, внутри стекла, — о чём строка (или «слушаю», «думает») и что ответил Claude.
-            Column(Modifier.weight(1f).padding(horizontal = 10.dp, vertical = 8.dp)) {
-                // «Для этого» — сразу за именем дела, внутри строки (отладка 16.10.2026, запись 2: чип стоял отдельной
-                // строкой над стеклом у левого края, под боковиной, и было «непонятно, к чему он относится»).
-                // Переключатель: «до этого надо X» становится делом внутри, а не заметкой (жалоба 15.10.2026), сервер
-                // ставит связь, проект и срок тем же правилом, что «Для этого» в карточке.
-                if (head != null) Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        head,
-                        style = ty.meta,
-                        color = mode.label,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (step != null && !listening && !busy) {
-                        Spacer(Modifier.width(8.dp))
-                        ru.zf.pravka.ui.PaperChip("Для этого", selected = step, onClick = onStep, icon = Glyphs.Plus)
-                    }
-                }
-                if (note.isNotBlank()) Text(note, style = ty.meta, color = if (noteError) ru.zf.pravka.ui.Ink.Warn else mode.value)
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    enabled = !busy,
-                    textStyle = ty.input.copy(color = if (busy) mode.meta else ru.zf.pravka.ui.Ink.Text),
-                    cursorBrush = SolidColor(mode.tint),
-                    maxLines = 5,
-                    modifier = Modifier.fillMaxWidth().padding(top = 2.dp).semantics { contentDescription = placeholder },
-                    decorationBox = { inner ->
-                        Box(contentAlignment = Alignment.CenterStart) {
-                            // Две строки: «Добавь дело или скажи, что сделать» на сложенном в одну не влезает (16.10.2026).
-                            if (value.isEmpty()) Text(placeholder, style = ty.input, color = mode.placeholder, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            inner()
-                        }
-                    },
-                )
-            }
-            val canSend = value.isNotBlank() && !busy
-            Box(Modifier.alpha(if (canSend) 1f else 0.35f)) {
-                ru.zf.pravka.ui.Key(Glyphs.ArrowUp, "отдать Claude", onClick = { if (canSend) onSend() }, size = 46.dp, enabled = canSend)
-            }
-        }
-    }
-}
-
-/**
- * Окно разговора (`showTalk` веба): реплики сверху вниз — что сказал (пузырём
- * справа), ответ Claude, что сделано (дела открываются карточкой), ошибки и
- * «Вернуть» у каждой реплики; внизу — своя строка ответа: микрофон слева,
- * стрелка справа. Ответ уходит с `scope.history`. «Хорошо» или крестик —
- * разговор окончен; новая команда из строки внизу вкладки — новый разговор.
- */
-@Composable
-internal fun TalkSheet(
-    talk: Talk,
-    snap: Dela.Snapshot,
-    onText: (String) -> Unit,
-    onSend: (String) -> Unit,
-    onDismiss: () -> Unit,
-    onOpen: (String) -> Unit,
-    onUndo: (Int) -> Unit,
-    /**
-     * «Это отдельное дело» у правки, где Claude дописал заметку (16.10.2026, запись 23; docs/dela-phone-32.md §3):
-     * номер реплики и правка; пачку собирает `Dela.splitNoteOps`, шлёт вкладка. [onUnsplit] — «Вернуть» отделённого.
-     */
-    onSplit: (Int, DelaAsk.Change) -> Unit = { _, _ -> },
-    onUnsplit: (Int, String) -> Unit = { _, _ -> },
-) {
-    val mode = ru.zf.pravka.ui.LocalMode.current
-    val ty = ru.zf.pravka.ui.LocalPravkaType.current
-    val context = LocalContext.current
-    var listening by remember { mutableStateOf(false) }
-    val busy = talk.busy.isNotBlank()
-    PaperSheet(
-        onDismiss = { if (listening) PravkaAccessibilityService.instance?.finishDelaReason(keep = false); onDismiss() },
-        title = "Claude",
-        subtitle = talk.turns.size.takeIf { it > 1 }?.let { plural(it, "реплика", "реплики", "реплик") },
-        footer = {
-            GlyphButton(
-                if (listening) Glyphs.Stop else Glyphs.Mic,
-                if (listening) "готово — текст в поле" else "ответить голосом: нажми, говори, нажми ещё раз",
-                tint = if (listening) mode.value else mode.label,
-                enabled = !busy,
-                onClick = {
-                    val service = PravkaAccessibilityService.instance
-                    when {
-                        service == null -> Feedback.toast(context, context.getString(R.string.toast_no_service))
-                        listening -> if (!service.finishDelaReason(keep = true)) listening = false
-                        else -> {
-                            val base = talk.text.trim()
-                            // «Стоп» — текст в поле ответа, отдаёт владелец (16.10.2026, запись 12 отладки).
-                            listening = service.listenForDelaReason("Говори — нажми микрофон ещё раз, текст встанет в поле") { said ->
-                                listening = false
-                                onText(DelaAsk.voiced(base, said))
-                            }
-                        }
-                    }
-                },
-            )
-            Box(Modifier.weight(1f).padding(horizontal = 6.dp)) {
-                PaperField(
-                    value = talk.text,
-                    onValueChange = onText,
-                    placeholder = if (busy) "Claude думает…" else if (listening) "Слушаю…" else "Ответить Claude…",
-                    singleLine = false,
-                    maxLines = 4,
-                    enabled = !busy,
-                )
-            }
-            Box(Modifier.alpha(if (talk.text.isNotBlank() && !busy) 1f else 0.35f)) {
-                ru.zf.pravka.ui.Key(Glyphs.ArrowUp, "ответить Claude", onClick = { if (talk.text.isNotBlank() && !busy) onSend(talk.text.trim()) }, size = 44.dp)
-            }
-            PaperTextButton("Хорошо", onClick = onDismiss)
-        },
-    ) {
-        talk.turns.forEachIndexed { i, t ->
-            if (i > 0) RowRule()
-            TurnView(t, snap, onOpen = onOpen, onUndo = { onUndo(i) }, onSplit = { ch -> onSplit(i, ch) }, onUnsplit = { id -> onUnsplit(i, id) })
-        }
-        // Под свежей репликой — кнопки ответа (16.10.2026, записи отладки 21–22; над строкой «Ответить Claude…»
-        // внизу листа): ответы сервера, а вопрос без них — «Да» и «Нет». Кнопка — её текст следующей репликой.
-        val answers = if (busy) emptyList() else DelaAsk.answersOf(talk.turns.lastOrNull())
-        if (answers.isNotEmpty()) {
-            ru.zf.pravka.ui.ChipRow(Modifier.padding(top = 6.dp)) {
-                answers.forEach { a -> ru.zf.pravka.ui.PaperChip(a, selected = false, onClick = { onSend(a) }) }
-            }
-        }
-        if (busy) {
-            if (talk.turns.isNotEmpty()) RowRule()
-            Said(talk.busy)
-            Text("Claude думает…", style = ty.label, color = mode.meta)
-        }
-        if (talk.error.isNotBlank()) PaperHint(talk.error, ru.zf.pravka.ui.Ink.Warn)
-    }
-}
-
 /** Что сказал — пузырём справа. */
 @Composable
 private fun Said(text: String) {
@@ -357,82 +120,6 @@ private fun Said(text: String) {
                 .background(mode.tint.copy(alpha = 0.18f))
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         )
-    }
-}
-
-/**
- * Реплика (`turnView` веба): что сказал, ответ, что сделано, ошибки и «Вернуть». Номеров дел нет. Под правкой, где Claude
- * дописал заметку, — «Это отдельное дело» (запись 23), после — «Отдельным делом: «…»» с «Вернуть».
- */
-@Composable
-private fun TurnView(
-    t: DelaAsk.Turn,
-    snap: Dela.Snapshot,
-    onOpen: (String) -> Unit,
-    onUndo: () -> Unit,
-    onSplit: (DelaAsk.Change) -> Unit = {},
-    onUnsplit: (String) -> Unit = {},
-) {
-    val r = t.result
-    val mode = ru.zf.pravka.ui.LocalMode.current
-    val ty = ru.zf.pravka.ui.LocalPravkaType.current
-    Said(t.said)
-    val nothing = !r.did && r.errors.isEmpty()
-    if (r.reply.isNotBlank()) Text(r.reply, style = ty.body, color = ru.zf.pravka.ui.Ink.Text)
-    else if (nothing) Text("Ничего не поменял.", style = ty.label, color = mode.meta)
-    for (x in r.decided) {
-        AskLine(DelaAsk.decidedWord(x), if (x.accept) "" else x.reason) { if (x.accept && x.id.isNotBlank()) onOpen(x.id) }
-    }
-    for (ch in r.changed) {
-        val title = ch.after.optString("title").takeIf { ch.after.has("title") && it.isNotBlank() } ?: ch.title
-        AskLine(title, DelaAsk.describe(ch, snap)) { onOpen(ch.id) }
-        val made = t.split[ch.id]
-        if (made != null) Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.weight(1f)) { AskLine("Отдельным делом: «${made.title}»", "") { onOpen(made.id) } }
-            if (!t.undone) PaperTextButton("Вернуть", icon = Glyphs.Undo, onClick = { onUnsplit(ch.id) })
-        } else if (!t.undone && DelaAsk.notedOf(ch).isNotBlank() && snap.tasks[ch.id] != null) {
-            ru.zf.pravka.ui.PaperChip("Это отдельное дело", selected = false, onClick = { onSplit(ch) }, icon = Glyphs.Plus)
-        }
-    }
-    if (r.tasks.isNotEmpty()) {
-        PaperHint(if (r.isNew) "Записал:" else "Новые:")
-        for (x in r.tasks) {
-            val meta = listOfNotNull(
-                snap.projects[x.projectId]?.name ?: x.projectName.takeIf { it.isNotBlank() },
-                x.personId.takeIf { it.isNotBlank() }?.let { pid ->
-                    (if (x.owed) "ждёт " else if (x.ball == Dela.WAITING) "жду " else if (x.ball == Dela.AGENDA) "повестка · " else "") + (snap.people[pid]?.label ?: x.who)
-                },
-                x.dueDate.takeIf { it.isNotBlank() }?.let { "срок " + DelaAsk.ddmm(it, snap.today) },
-                x.estimateMin.takeIf { it > 0 }?.let { "$it мин" },
-            ).joinToString(" · ")
-            AskLine(x.title, meta) { onOpen(x.id) }
-        }
-    }
-    if (r.notes.isNotEmpty()) {
-        PaperHint("В хронологию:")
-        for (n in r.notes) PaperHint(n.summary + (snap.projects[n.projectId]?.name?.let { " · $it" } ?: ""), ru.zf.pravka.ui.Ink.Text)
-    }
-    // Правки карточки — проекты, люди, хронология (`crm[]`): словами, как их назвал сервер.
-    if (r.crm.isNotEmpty()) {
-        PaperHint("Проекты, люди, хронология:")
-        for (cr in r.crm) PaperHint(cr.what, ru.zf.pravka.ui.Ink.Text)
-    }
-    if (r.errors.isNotEmpty()) PaperHint("Не вышло: " + r.errors.joinToString("; "), ru.zf.pravka.ui.Ink.Warn)
-    when {
-        t.undone -> Text("Вернул как было", style = ty.label, color = mode.meta)
-        r.undoable -> Row {
-            Spacer(Modifier.weight(1f))
-            val dropped = r.decided.any { !it.accept }
-            PaperTextButton(if (dropped) "Вернуть принятое" else "Вернуть", icon = Glyphs.Undo, onClick = onUndo)
-        }
-    }
-}
-
-@Composable
-private fun AskLine(title: String, meta: String, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 6.dp)) {
-        Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-        if (meta.isNotBlank()) Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

@@ -84,15 +84,6 @@ class ProfileTest {
         assertTrue(note.contains("«я купила», не «я купил»"))
     }
 
-    @Test
-    fun `набор промптов туда и обратно, чужой файл — отказ`() {
-        val texts = mapOf("clean_claude" to "мой промпт", "money" to "деньги")
-        val (from, back) = PromptSet.decode(PromptSet.encode("Саша", texts, 1L))
-        assertEquals("Саша", from)
-        assertEquals(texts, back)
-        val err = runCatching { PromptSet.decode("""{"format":"pravka-dictionary"}""") }.exceptionOrNull()
-        assertTrue(err is IllegalArgumentException)
-    }
 
     @Test
     fun `приписка к разговору — в роде автора`() {

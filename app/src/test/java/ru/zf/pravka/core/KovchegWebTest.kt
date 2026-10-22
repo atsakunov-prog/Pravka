@@ -60,6 +60,16 @@ class KovchegWebTest {
     }
 
     @Test
+    fun `«открыть …» с кнопки — страница сервера по ключу`() {
+        assertEquals("$base/#/zasechka", Kovcheg.pageFor("zasechka", nav, base)?.url)
+        assertEquals("$base/t", Kovcheg.pageFor("dela", nav, base)?.url)
+        assertEquals("https://eda.example.org/", Kovcheg.pageFor("eda", nav, base)?.url)
+        assertEquals("Еда", Kovcheg.pageFor("eda", nav, base)?.name)
+        assertEquals(null, Kovcheg.pageFor("kino", nav, base))
+        assertEquals(null, Kovcheg.pageFor("today", nav, null))
+    }
+
+    @Test
     fun `прежний вид не тронут — Спорт и Дела там экранами`() {
         val own = Kovcheg.own(setOf(Kovcheg.SPORT, Kovcheg.DELA), crm = false)
         val built = Kovcheg.build(Kovcheg.FACTORY, own, nav, base)

@@ -291,6 +291,23 @@ object Kovcheg {
         nav.forEach { put(JSONObject().put("name", it.name).put("icon", it.icon).put("url", it.url).put("key", it.key)) }
     }
 
+    /**
+     * Страница сервиса по ключу (22.10.2026, своих экранов у телефона нет): «Открыть Засечку» из меню кнопки,
+     * уведомление, виджет — ведут на страницу сервера. Большие кнопки — веб Дел ([WEB_OF]), «dela» — `/t`,
+     * остальное — адрес из `look.nav`. null — адреса нет (сервер не подключён или сервиса нет в списке).
+     */
+    fun pageFor(key: String, nav: List<Nav>, base: String?): ServicePage? {
+        val url = when {
+            key in WEB_OF -> absolute(WEB_OF.getValue(key), base)
+            key == "dela" -> base?.let { DelaWeb.pageUrl(it) }
+            else -> nav.firstOrNull { it.key == key }?.let { n ->
+                if (n.url == "/") base?.let { DelaWeb.pageUrl(it) } else absolute(n.url, base)
+            }
+        } ?: return null
+        val (name, icon) = CATALOG[key] ?: (key to "globe")
+        return ServicePage(name, icon, url)
+    }
+
     /** Полный адрес: http(s) как есть; «/путь» — от адреса Дел; «/» (сами Дела) и прочее — null. */
     fun absolute(url: String, base: String?): String? = when {
         url.startsWith("https://") || url.startsWith("http://") -> url

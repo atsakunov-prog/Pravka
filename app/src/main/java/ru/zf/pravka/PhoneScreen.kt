@@ -20,10 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import ru.zf.pravka.core.PhoneRemote
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.Kv
-import ru.zf.pravka.ui.KvCallout
 import ru.zf.pravka.ui.KvListRow
 import ru.zf.pravka.ui.KvNote
 import ru.zf.pravka.ui.KvSetRow
@@ -74,32 +72,8 @@ private fun phoneGroups(app: PravkaApp): List<Pair<SettingsShelf, List<SettingsG
 private fun groupLine(app: PravkaApp, g: SettingsGroup): Pair<String, String?> {
     val st = groupStatus(app, g)
     val line = if (st?.ok == false) g.hint to st.text else (st?.text?.let { "$it · ${g.hint}" } ?: g.hint) to null
-    // Поставлено с компьютера за трое суток — первым словом строки: «откуда это у меня?» — отвечено на месте.
-    val remote by app.phoneRemote.view.collectAsState()
-    val note = g.remoteKey?.let { PhoneRemote.groupNote(remote.applied, it, System.currentTimeMillis()) }
-    return if (note == null) line else "$note · ${line.first}" to line.second
+    return line
 }
-
-/**
- * Группа страницы «Телефон» в вебе Дел (`PhoneKnobs.GROUPS`) для группы этого экрана: по ней — пометка
- * «поменяно с компьютера». У групп, которых издалека не правят (ключи, Свод, баги), её нет.
- */
-private val SettingsGroup.remoteKey: String?
-    get() = when (this) {
-        SettingsGroup.MODELS -> "models"
-        SettingsGroup.VOICE -> "voice"
-        SettingsGroup.ZASECHKA -> "zasechka"
-        SettingsGroup.TODAY -> "today"
-        SettingsGroup.PRAVKA -> "pravka"
-        SettingsGroup.SPORT -> "sport"
-        SettingsGroup.FOOD -> "food"
-        SettingsGroup.MONEY -> "money"
-        SettingsGroup.NET -> "net"
-        SettingsGroup.CARDS -> "look"
-        SettingsGroup.DATA -> "data"
-        SettingsGroup.APP -> "app"
-        else -> null
-    }
 
 @Composable
 internal fun PhoneSettingsScreen(
@@ -185,16 +159,6 @@ internal fun PhoneSettingsScreen(
                 Text(picked.title, style = LocalPravkaType.current.titleS, color = Kv.text)
             }
             KvNote(picked.hint, Modifier.padding(start = 16.dp))
-            // Что в этой группе поставлено с компьютера — над её плашками, словами и со временем.
-            val remote by app.phoneRemote.view.collectAsState()
-            val fromPc = picked.remoteKey?.let { k -> PhoneRemote.recent(remote.applied, System.currentTimeMillis()).filter { it.group == k } }.orEmpty()
-            if (fromPc.isNotEmpty()) {
-                KvCallout(
-                    fromPc.take(3).joinToString("\n") { "${it.title}: ${it.value} — поменяно с компьютера ${PhoneRemote.whenWords(it.atMs, System.currentTimeMillis())}" },
-                    Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
-                    icon = ru.zf.pravka.ui.KvGlyphs.byKey("monitor") ?: Glyphs.Phone,
-                )
-            }
             Box(Modifier.weight(1f)) {
                 ModeSettingsScreen(
                     app,
@@ -208,11 +172,7 @@ internal fun PhoneSettingsScreen(
     }
 }
 
-/**
- * Где лежат настройки — правдой, а не обещанием (14.10.2026): видны и правятся с компьютера страницей
- * «Телефон» в вебе Дел, телефон берёт правку синком; что поставлено оттуда — плашкой «С компьютера». Ниже —
- * что живёт только в руках (холст: «Только в руках»): служба доступности и плавающие кнопки, обновления.
- */
+/** Служба доступности и плавающие кнопки, обновления — над группами настроек. */
 @Composable
 private fun PhoneServiceBlock(
     app: PravkaApp,
@@ -220,43 +180,8 @@ private fun PhoneServiceBlock(
     onOpenAccessibilitySettings: () -> Unit,
     onOpen: () -> Unit,
 ) {
-    val remote by app.phoneRemote.view.collectAsState()
-    val now = System.currentTimeMillis()
-    KvCallout(
-        phoneServerLine(remote, now),
-        icon = ru.zf.pravka.ui.KvGlyphs.byKey("server") ?: Glyphs.Phone,
-        tone = if (remote.linked && remote.error.isNotBlank() && remote.errorAt >= remote.okAt) ru.zf.pravka.ui.KvTone.WARN else ru.zf.pravka.ui.KvTone.PLAIN,
-    )
-    val fresh = PhoneRemote.recent(remote.applied, now)
-    if (fresh.isNotEmpty()) {
-        PaperCard(label = "С компьютера", note = "за трое суток") {
-            fresh.take(5).forEachIndexed { i, a ->
-                KvListRow(
-                    title = a.title,
-                    sub = "${a.value} — поменяно с компьютера ${PhoneRemote.whenWords(a.atMs, now)}",
-                    icon = ru.zf.pravka.ui.KvGlyphs.byKey("monitor") ?: Glyphs.Phone,
-                    divider = i > 0,
-                )
-            }
-        }
-    }
-    PaperCard(label = "Только в руках", note = "с компа видно, менять — тут") {
-        KvNote(
-            "Служба доступности и плавающие кнопки, разрешения Android, микрофон по умолчанию, места Wi-Fi, машина и метки NFC. Ключи и токены с телефона не уходят вовсе.",
-        )
-    }
     UpdateNowCard(app)
     StatusStrip(app, serviceEnabled, onOpenAccessibilitySettings, onOpen)
-}
-
-/** Строка о сервере: видно ли с компьютера, когда сервер видел настройки, что не так. */
-internal fun phoneServerLine(v: ru.zf.pravka.data.PhoneRemoteSync.View, now: Long): String = when {
-    !v.linked -> "Настройки этого телефона видно и можно менять с компьютера — на странице «Телефон» в вебе Дел, когда телефон подключён к Делам (Подключения → Дела)."
-    v.oldServerAt > 0 -> "Сервер Дел ещё без настроек телефона — его обновят на компе (install-dela.ps1). Пока настройки только здесь."
-    else -> "Эти настройки видно и можно менять с компьютера — страница «Телефон» в вебе Дел. Правку оттуда телефон берёт синком Дел и ставит так же, как тумблер здесь." +
-        (if (v.okAt > 0) " Сервер видел их ${PhoneRemote.whenWords(v.okAt, now)}." else " Сервер их ещё не видел — первый снимок уйдёт в ближайшие минуты.") +
-        (if (v.error.isNotBlank() && v.errorAt >= v.okAt) " Последний раз не ушли: ${v.error}" else "") +
-        (if (v.pending > 0) " Ждут телефона: ${v.pending}." else "")
 }
 
 /** Служебные экраны бывшего «Ещё»: разборы, словарь, промпты, логи… — строками своих плашек. */

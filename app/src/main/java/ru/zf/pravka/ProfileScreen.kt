@@ -96,54 +96,6 @@ private const val MODES_INFO =
         "включишь, и всё на месте. На диске остаётся столько кнопок, сколько режимов " +
         "с кнопкой включено, от пяти до одной «П»."
 
-/** Первый запуск: кто пользуется и что включить. Пока не ответят — остального приложения нет. */
-@Composable
-internal fun ProfileOnboarding(app: PravkaApp) {
-    val who = remember { WhoState(null) }
-    var modes by remember { mutableStateOf(Profile.Mode.entries.toSet()) }
-    var saving by remember { mutableStateOf(false) }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
-        Text("Правка", style = MaterialTheme.typography.headlineSmall)
-        PaperCard(label = "кто пользуется") {
-            PaperHint("Чья это установка: у каждого своя база, свой род в чистке текста и свои режимы.")
-            Spacer(Modifier.height(8.dp))
-            WhoPicker(who)
-        }
-        PaperCard(label = "что включить", info = MODES_INFO) {
-            ModeToggles(modes) { modes = it }
-        }
-        PaperCard {
-            PaperHint(
-                "Уже есть база с другого телефона — сначала ответь здесь, потом в Настройках " +
-                    "открой «База данных»: там будет «Открыть эту базу»."
-            )
-        }
-        PaperButton(
-            "Готово",
-            onClick = {
-                val p = who.build(modes, keepId = null) ?: return@PaperButton
-                saving = true
-                app.appScope.launch(Dispatchers.IO) {
-                    runCatching {
-                        app.profileStore.save(p)
-                        app.eventLog.add("профиль: ${p.name} (${p.id}), режимы: ${p.modes.joinToString { it.key }}")
-                        if (!p.owner) ownerAutomatsOff(app)
-                    }.onFailure { saving = false }
-                }
-            },
-            primary = true,
-            enabled = who.ready && !saving,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-}
-
 /**
  * Не владелец: автоматы владельца с завода выключены. Ночной разбор и правка
  * промпта написаны про Сашу и тратят ключ. Одно и то же — при первом запуске и при смене

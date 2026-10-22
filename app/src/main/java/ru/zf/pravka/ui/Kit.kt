@@ -315,10 +315,6 @@ fun RowScope.IconAction(
     onLongClick: (() -> Unit)? = null,
 ) = IconLabel(icon, label, onClick, enabled, active, onLongClick)
 
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
-private fun Modifier.combinedClickableCompat(enabled: Boolean, onClick: () -> Unit, onLongClick: () -> Unit): Modifier =
-    this.combinedClickable(enabled = enabled, onClick = onClick, onLongClick = onLongClick)
-
 /** Ряд [IconAction] во всю ширину плашки. */
 @Composable
 fun IconActionRow(content: @Composable RowScope.() -> Unit) {
@@ -826,70 +822,6 @@ fun PaperField(
     )
 }
 
-/**
- * Строка ввода режима — Правка 4.0 (07.10.2026): это строка «сказать»
- * (`ui/SayBar.kt`, DESIGN §11.4). Параметры прежней пилюли сохранены, чтобы
- * вкладки переехали вниз без переделки разбора: [extras] и [leading] —
- * значки перед клавишей (камера, галерея, штрихкод, вставить).
- */
-@Composable
-fun VoiceInput(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String,
-    onSend: () -> Unit,
-    modifier: Modifier = Modifier,
-    onMic: (() -> Unit)? = null,
-    listening: Boolean = false,
-    sendEnabled: Boolean = value.isNotBlank(),
-    enabled: Boolean = true,
-    maxLines: Int = 4,
-    sendIcon: ImageVector = Glyphs.ArrowUp,
-    extras: (@Composable RowScope.() -> Unit)? = null,
-    busy: Boolean = false,
-    leading: (@Composable RowScope.() -> Unit)? = null,
-    busyLabel: String = "Разбираю",
-) {
-    val icons: (@Composable RowScope.() -> Unit)? = when {
-        leading != null && extras != null -> ({ leading(); extras() })
-        else -> leading ?: extras
-    }
-    SayBar(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = placeholder,
-        onSend = onSend,
-        modifier = modifier,
-        onMic = onMic,
-        listening = listening,
-        sendEnabled = sendEnabled,
-        enabled = enabled,
-        maxLines = maxLines,
-        busy = busy,
-        busyLabel = busyLabel,
-        trailing = icons,
-        sendIcon = sendIcon,
-    )
-}
-
-/**
- * Значок внутри строки «сказать» — для [VoiceInput.leading]: снимок,
- * галерея, штрихкод, «из буфера».
- */
-@Composable
-fun PillAction(icon: ImageVector, description: String, onClick: () -> Unit, enabled: Boolean = true) =
-    SayIcon(icon, description, onClick, enabled)
-
-/**
- * Место строки «сказать». До 4.0 пилюля стояла первой строкой вкладки; теперь
- * строка внизу экрана (DESIGN §11.4): вкладки, которые ещё не переехали,
- * получают её отступы.
- */
-@Composable
-fun TopPill(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 4.dp)) { content() }
-}
-
 /** Знак режима — тот же, что у его кнопки внизу и на стекле. */
 internal fun decorGlyph(decor: ModeDecor): ImageVector = when (decor) {
     ModeDecor.PRAVKA, ModeDecor.SERVICE, ModeDecor.TODAY -> Glyphs.Pravka
@@ -899,98 +831,6 @@ internal fun decorGlyph(decor: ModeDecor): ImageVector = when (decor) {
     ModeDecor.FOOD -> Glyphs.Food
     ModeDecor.MONEY -> Glyphs.Money
 }
-
-/**
- * «Причёсываю · ещё 6 с» — Claude работает, и видно сколько ждать (версия 3):
- * искры краской режима, слово, секунды из того же обещания, что на кнопке.
- * Секунды вышли — остаётся слово с искрами: замершее «0,0» читалось бы
- * «повисло». Пока строка на экране, свет вкладки ярче.
- */
-@Composable
-fun ThinkingLine(label: String, modifier: Modifier = Modifier) {
-    // Правка 4.0 (DESIGN §4.4): «Claude думает» — заливка слева направо
-    // tint @ .25 по строке, слово и секунды до ответа; без пульса.
-    GlowBusy(true)
-    val mode = LocalMode.current
-    val t = LocalPravkaType.current
-    val seconds by LocalClaudeSeconds.current
-    val progress by LocalClaudeProgress.current
-    val shape = RoundedCornerShape(if (Look.v2) KvShape.Control else 12.dp)
-    Row(
-        modifier
-            .clip(shape)
-            .drawBehind {
-                val f = (progress ?: 1f).coerceIn(0f, 1f)
-                drawRect(mode.tint.copy(alpha = 0.25f), size = androidx.compose.ui.geometry.Size(size.width * f, size.height))
-            }
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Glyphs.Spark, contentDescription = null, tint = mode.label, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(label, style = t.body, color = Ink.Text, fontWeight = FontWeight.Medium)
-        val s = seconds
-        if (s != null) {
-            Text(" · ещё $s с", style = t.meta, color = mode.meta)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Навигатор дня
-// ---------------------------------------------------------------------------
-
-/**
- * Один навигатор дня на Засечку, Еду и Статистику: стрелки по краям,
- * посередине день словом и дата под ним. Раньше их было три разных — с
- * «сегодня» строчной, с «Сегодня» заголовком и с датой дважды.
- * [onNext] = null — вперёд некуда (сегодня), стрелка гаснет.
- */
-@Composable
-fun DayNav(
-    title: String,
-    onPrev: () -> Unit,
-    onNext: (() -> Unit)?,
-    subtitle: String? = null,
-    onTitleClick: (() -> Unit)? = null,
-) {
-    // Правка 4.0 (DESIGN §11.7 DayNavigator): «‹ Сегодня / понедельник, 5
-    // октября ›»; вперёд некуда — «›» тоном `textDisabled`.
-    val mode = LocalMode.current
-    val t = LocalPravkaType.current
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        GlyphButton(Glyphs.Back, "день назад", onClick = onPrev, tint = mode.label, size = 44.dp)
-        Column(
-            Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(10.dp))
-                .then(if (onTitleClick != null) Modifier.clickable(onClick = onTitleClick) else Modifier)
-                .padding(vertical = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(title, style = t.valueS, color = Ink.Text, maxLines = 1)
-            if (!subtitle.isNullOrBlank()) {
-                Text(subtitle, style = t.label, color = mode.label, maxLines = 1)
-            }
-        }
-        Box(
-            Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .clickable(enabled = onNext != null, role = Role.Button, onClickLabel = "день вперёд") { onNext?.invoke() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Glyphs.Forward, "день вперёд", tint = if (onNext != null) mode.label else Ink.TextDisabled, modifier = Modifier.size(22.dp))
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Ползунок настроек
-// ---------------------------------------------------------------------------
 
 /**
  * Ползунок строкой: название и значение над дорожкой, «i» с пояснением.

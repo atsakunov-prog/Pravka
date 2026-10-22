@@ -32,37 +32,6 @@ import ru.zf.pravka.ui.Haptics
 // Тело в службе: тап «Т» (еда, подходы, зарядка, вопрос), плашки еды и силовой,
 // таймер отдыха, уведомления о приехавших тренировках. Расширения PravkaAccessibilityService.
 
-/**
- * «Пробежка приехала: 5,2 км, пульс 152 против потолка 150» — как только
- * выгрузка увидела новую тренировку с часов. Кнопки 2/3/4 пишут feel прямо
- * в активность intervals; крайние 1 и 5 редки, за ними — во вкладку.
- */
-internal suspend fun PravkaAccessibilityService.notifyArrivedWorkouts() {
-    val arrived = app.icuSportSync.takeArrived()
-    if (arrived.isEmpty()) return
-    if (!runCatching { app.settings.sportNotify() }.getOrDefault(true)) return
-    val rules = app.planStore.rulesFlow.value
-    for (w in arrived.take(2)) {
-        val name = ru.zf.pravka.core.SportCoach.sportName(w.type)
-        val bits = mutableListOf<String>()
-        if (w.km >= 0.1) bits.add(String.format(java.util.Locale.US, "%.1f км", w.km))
-        if (w.minutes > 0) bits.add("${w.minutes} мин")
-        if (w.avgHr > 0) bits.add("пульс ${w.avgHr}")
-        val verdict = when {
-            !w.type.equals("Run", true) || w.avgHr <= 0 || rules.runHrCeiling <= 0 -> ""
-            w.avgHr <= rules.runHrCeiling -> "Под потолком ${rules.runHrCeiling} ✓."
-            rules.greyZoneLow in 1..w.avgHr && w.avgHr <= rules.greyZoneHigh ->
-                "Серая зона ${rules.greyZoneLow}–${rules.greyZoneHigh} — твоё же правило."
-            else -> "Выше потолка ${rules.runHrCeiling}."
-        }
-        sportNotify(
-            workoutId = w.id,
-            title = "$name приехал${if (name.endsWith("а")) "а" else ""}: " + bits.joinToString(", "),
-            text = (verdict + " Как самочувствие? 1 отлично … 5 развалина").trim(),
-        )
-    }
-}
-
 internal fun PravkaAccessibilityService.sportNotify(workoutId: String, title: String, text: String) {
     runCatching {
         val nm = getSystemService(android.app.NotificationManager::class.java)
@@ -392,7 +361,8 @@ internal fun PravkaAccessibilityService.showBodyPlate(outcome: ru.zf.pravka.core
         }
         outcome.feel > 0 || outcome.knee.isNotBlank() ->
             eButton?.showNote("✓ " + outcome.headline(), null, onAction = null)
-        outcome.question.isNotBlank() -> askCoach(outcome.question)
+        // Тренера на телефоне больше нет (22.10.2026): вопрос — «Спорту» на компе.
+        outcome.question.isNotBlank() -> Feedback.toast(this, "Тренера на телефоне больше нет — спроси «Спорт» на компе", long = true)
         else -> {
             Feedback.toast(
                 this,
@@ -518,47 +488,11 @@ internal fun PravkaAccessibilityService.dropStrengthRow(sessionId: Long, index: 
     }
 }
 
-/** Отдых из карточки дня во вкладке: считает всё равно кнопка. */
-fun PravkaAccessibilityService.startRestFromTab(seconds: Int) = startRest(seconds)
-
 internal fun PravkaAccessibilityService.startRest(seconds: Int) {
     restHandler.removeCallbacks(restTick)
     restUntil = System.currentTimeMillis() + seconds * 1000L
     Haptics.start(this)
     restHandler.post(restTick)
-}
-
-internal fun PravkaAccessibilityService.stopRest() {
-    restHandler.removeCallbacks(restTick)
-    restUntil = 0L
-    eButton?.setRest(0)
-}
-
-/** Вопрос голосом: Опус отвечает, ответ ложится запиской у кнопки. */
-internal fun PravkaAccessibilityService.askCoach(question: String) {
-    eButton?.setBusy(true)
-    scope.launch {
-        val answer = runCatching { app.sportCoach.ask(question) }
-            .getOrElse { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                ru.zf.pravka.core.SportCoach.Answer("", 0.0, e.message ?: "не вышло")
-            }
-        eButton?.setBusy(false)
-        if (answer.error.isNotBlank()) {
-            Haptics.error(this@askCoach)
-            Feedback.toast(this@askCoach, answer.error, long = true)
-            return@launch
-        }
-        // Ответ бывает в несколько абзацев — на плашке он не поместится, и
-        // растягивать её на пол-экрана незачем: первые строки здесь,
-        // целиком во вкладке «Спорт».
-        eButton?.showNote(
-            answer.text.replace('\n', ' ').take(180),
-            "Целиком",
-            holdMs = 30_000,
-            onAction = { openSportTab() },
-        )
-    }
 }
 
 /** Голосовые имена упражнений и продуктов для смещения распознавателя. */
@@ -844,44 +778,9 @@ internal fun PravkaAccessibilityService.showFoodMenu() {
             listOf(
                 BodyButtonController.MenuItem(head) { openFoodTab() },
                 BodyButtonController.MenuItem("Записать еду") { onFoodTap() },
-                // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
-                BodyButtonController.MenuItem("🐞 Баг или предложение") { startFeedbackTake("Е") },
                 BodyButtonController.MenuItem("Настройки") { openSettingsTab("FOOD") },
                 BodyButtonController.MenuItem("Закрыть") { eButton?.hideMenu() },
             )
         )
-    }
-}
-
-/** «Зарядка сделана»: одна отметка, ноль токенов, цепочка не рвётся. */
-internal fun PravkaAccessibilityService.markCharged() {
-    scope.launch {
-        val day = app.bodyEngine.chargedToday()
-        val streak = app.strengthStore.streak(day.date)
-        Haptics.success(this@markCharged)
-        eButton?.showNote("✓ Зарядка сделана · цепочка $streak дн.", null, onAction = null)
-    }
-}
-
-internal fun PravkaAccessibilityService.reparseFood(mealId: Long) {
-    eButton?.setBusy(true)
-    scope.launch {
-        val result = runCatching { app.foodEngine.reparse(mealId) }
-            .getOrElse { e ->
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                Result.failure(e)
-            }
-        eButton?.setBusy(false)
-        result.onSuccess { parsed ->
-            Haptics.success(this@reparseFood)
-            showFoodPlate(parsed.meal.id)
-        }.onFailure { e ->
-            Haptics.error(this@reparseFood)
-            Feedback.toast(
-                this@reparseFood,
-                e.message ?: "Разобрать заново не вышло",
-                long = true,
-            )
-        }
     }
 }

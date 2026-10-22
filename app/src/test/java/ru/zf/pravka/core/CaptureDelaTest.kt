@@ -65,34 +65,6 @@ class CaptureDelaTest {
         assertEquals(Dela.KIND_TASK, old.tasks["x"]!!.kind)
     }
 
-    @Test
-    fun `идея с телефона поверх копии и слияние людей`() {
-        val s = Dela.Snapshot(
-            people = mapOf("dup" to Dela.Person("dup", "Иван Т."), "iv" to Dela.Person("iv", "Иван Тестов")),
-            ideas = mapOf("i1" to Dela.Idea("i1", "позвать на семинар", personId = "dup")),
-        )
-        val ops = listOf(
-            JSONObject().put("op", "idea.add").put("op_id", "o1").put("idea", JSONObject().put("id", "i2").put("text", "косткаттинг").put("project_id", "p1")),
-            JSONObject().put("op", "idea.set").put("op_id", "o2").put("id", "i1").put("set", JSONObject().put("status", "dropped")),
-            JSONObject().put("op", "person.merge").put("op_id", "o3").put("id", "dup").put("into", "iv"),
-        )
-        val v = Dela.overlay(s, ops, "me", today, "2026-10-15T10:00:00+03:00")
-        assertEquals("косткаттинг", v.ideas["i2"]!!.text)
-        assertTrue(v.ideas["i2"]!!.local)
-        assertEquals("dropped", v.ideas["i1"]!!.status)
-        assertEquals("идея дубля — у живой карточки, как переносит сервер", "iv", v.ideas["i1"]!!.personId)
-        // «В дело»: дело «потом» с привязкой идеи, идея — использована; «Вернуть» — всё обратно.
-        val x = Dela.Idea("i3", "предложить дашборд", projectId = "p1", dealId = "d1")
-        val u = Ideas.toTask(x, today, taskId = "t-new")
-        val create = u.ops[0].getJSONObject("task")
-        assertEquals("Предложить дашборд", create.getString("title"))
-        assertEquals("2026-10-16", create.getString("back_on"))
-        assertEquals("d1", create.getString("deal_id"))
-        assertEquals("used", u.ops[1].getJSONObject("set").getString("status"))
-        assertEquals("t-new", u.ops[1].getJSONObject("set").getString("task_id"))
-        assertEquals("task.cancel", u.back[0].getString("op"))
-        assertEquals("open", u.back[1].getJSONObject("set").getString("status"))
-    }
 
     // ------------------------------------------------------------ напоминание — не дело
 

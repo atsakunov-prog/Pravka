@@ -60,7 +60,6 @@ class WebDavTest {
     @Test fun tempNamesAreNeverJournalsOrBackups() {
         val t = Dav.tempName("sasha-3f9a2c.000001.jsonl")
         assertTrue(Dav.isTemp(t))
-        assertTrue(ru.zf.pravka.core.MoneySync.parseChunk(t) == null)
         assertFalse(Dav.tempName("pravka-sasha-2026-09-26.zip").startsWith("pravka-"))
     }
 

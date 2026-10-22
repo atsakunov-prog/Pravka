@@ -251,14 +251,6 @@ internal suspend fun PravkaApp.saveFoodGoals(kcal: Int, protein: Int, fat: Int, 
     settings.setFoodTargets(k, p, f, c)
 }
 
-/** Цель веса ползунком во «Спорте» — тем же путём: Свод, потом ручка. */
-internal suspend fun PravkaApp.saveGoalWeight(kg: Int) {
-    val w = kg.coerceIn(40, 200)
-    val t = settings.foodTargets()
-    putFoodGoals(t.kcal, t.protein, t.fat, t.carbs, w, "цель веса — Спорт")
-    settings.setGoalWeight(w)
-}
-
 private suspend fun PravkaApp.putFoodGoals(kcal: Int, protein: Int, fat: Int, carbs: Int, weight: Int, reason: String) {
     val v = FoodGoals.value(Svod.obj(FoodGoals.KEY), kcal, protein, fat, carbs, weight, java.time.LocalDate.now().toString())
     runCatching { svodStore.set(FoodGoals.KEY, value = v.toString(), author = "phone", reason = reason) }
@@ -275,22 +267,6 @@ internal fun PravkaApp.foodGoalsSource(view: SvodStore.View): String {
         e != null -> "С сервера Дел · версия ${e.rev}" + (if (e.author == "eda") " · правили в «Еде» на компе" else "")
         svodOn() -> "На сервере целей ещё нет — отдам свои с ближайшим синком"
         else -> "Только на телефоне — сервер Дел не подключён"
-    }
-}
-
-/**
- * Откуда правила блока или справочник упражнений ([key] — `sport.rules` или
- * `sport.exercises`): запись Свода с версией, засев в пути или замороженное на телефоне.
- */
-internal fun PravkaApp.sportSvodSource(view: SvodStore.View, key: String, frozen: String): String {
-    val e = view.entries.firstOrNull { it.key == key }
-    val seeding = view.pending.any { it.key == key }
-    return when {
-        e != null -> "С сервера Дел · версия ${e.rev}" + (if (e.author == "sport") " · правили в «Спорте» на компе" else "") +
-            (e.updatedAt.takeIf { it.length >= 10 }?.let { " · ${it.substring(8, 10)}.${it.substring(5, 7)}" } ?: "")
-        seeding && svodOn() -> "$frozen — отдаю на сервер Дел, дальше их правит «Спорт» на компе"
-        svodOn() -> "$frozen — на сервере записи нет, отдам с ближайшим синком"
-        else -> "$frozen — сервер Дел не подключён"
     }
 }
 

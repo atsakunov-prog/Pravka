@@ -49,47 +49,6 @@ fun PravkaAccessibilityService.onMoneyTap() {
 internal fun PravkaAccessibilityService.moneyTickerPrompt(): String =
     if (mTabSink != null) mTabPrompt.replaceFirstChar { it.uppercase() } else listenHint()
 
-/**
- * Наговор для вкладки «Деньги»: тот же движок и та же бегущая строка, что у
- * «₽», но текст отдаётся [onText], а не в разбор трат. Ход записи вкладка
- * видит через [MoneyTabVoice]. false — не стартовало (микрофон занят,
- * нет разрешения), причина уже сказана тостом.
- */
-fun PravkaAccessibilityService.listenForMoneyTab(owner: String, prompt: String, onText: (String) -> Unit): Boolean {
-    if (mSession != null || mWhisperRecording) {
-        Haptics.error(this)
-        Feedback.toast(this, getString(R.string.r_busy))
-        return false
-    }
-    if (googleSession != null || zSession != null || zWhisperRecording ||
-        rSession != null || rWhisperRecording || eSession != null || eWhisperRecording ||
-        DictationService.recording
-    ) {
-        Haptics.error(this)
-        Feedback.toast(this, getString(R.string.r_busy))
-        return false
-    }
-    if (!hasMicPermission()) {
-        requestMicPermission()
-        return false
-    }
-    mTabSink = onText
-    mTabPrompt = prompt
-    MoneyTabVoice.live.value = MoneyTabVoice.Live(owner, "")
-    startMoneyCapture()
-    // Движок недоступен — startMoneyGoogle сказал тостом; заявка снимается.
-    if (mSession == null && !mWhisperRecording) endMoneyTab()
-    return mSession != null || mWhisperRecording
-}
-
-/** Вкладка сама остановила запись: «Готово» — текст придёт, «Отмена» — нет. */
-fun PravkaAccessibilityService.finishMoneyTab(keep: Boolean) {
-    if (!keep) cancelMoneyTake() else if (mSession != null) stopMoneyLive() else if (mWhisperRecording && DictationService.recording) {
-        mButton?.setBusy(true)
-        stopDictation()
-    }
-}
-
 /** Заявка вкладки снята: запись кончилась так или иначе. */
 internal fun PravkaAccessibilityService.endMoneyTab() {
     mTabSink = null
@@ -500,8 +459,6 @@ internal fun PravkaAccessibilityService.showMoneyMenu() {
         if (questions > 0) items.add(RaznoskaButtonController.MenuItem("? Вопросов сверки: $questions") { openMoneyTab() })
         items.add(RaznoskaButtonController.MenuItem("Набрать текстом") { openMoneyTypeIn("") })
         items.add(RaznoskaButtonController.MenuItem("Открыть Деньги") { openMoneyTab() })
-        // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
-        items.add(RaznoskaButtonController.MenuItem("🐞 Баг или предложение") { startFeedbackTake("₽") })
         items.add(RaznoskaButtonController.MenuItem("Настройки") { openSettingsTab("MONEY") })
         items.add(RaznoskaButtonController.MenuItem("Закрыть") { mButton?.hideMenu() })
         mButton?.showMenu(items)

@@ -1743,8 +1743,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                     FloatingButtonController.MenuItem(getString(R.string.redo_polish), red) { redoWithDirective(ru.zf.pravka.core.Prompts.REDO_POLISH) },
                     FloatingButtonController.MenuItem("Обучить", red) { learnFromField() },
                     FloatingButtonController.MenuItem("Сброс", red) { resetStuck() },
-                    // Баг или предложение — голосом, с любой кнопки (07.10.2026, `ServiceFeedback.kt`).
-                    FloatingButtonController.MenuItem("🐞 Баг или предложение", red) { startFeedbackTake("П") },
                     FloatingButtonController.MenuItem("Открыть Правку", red) { openPravkaPrompts() },
                     FloatingButtonController.MenuItem("Настройки", red) { openSettingsTab("PRAVKA") },
                     FloatingButtonController.MenuItem("Закрыть", red) { floatingButton?.hideMenu() },
@@ -3187,8 +3185,6 @@ class PravkaAccessibilityService : AccessibilityService() {
     /** Сторож «окна висят, а их не видно» (`OverlayWatch`); живёт от подключения службы до onDestroy. */
     internal var overlayWatch: OverlayWatch? = null
 
-    /** Взгляд на экран для «Телефона в ленте» (`ScreenPeek`): свой поток, не главный. */
-    internal var screenPeek: ScreenPeek? = null
 
     /**
      * Когда началось последнее складывание (uptime): взгляд на экран ждёт
@@ -3280,8 +3276,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         overlayWatch?.stop()
         overlayWatch = null
         runCatching { unwatchPendingNetwork() }
-        screenPeek?.stop()
-        screenPeek = null
         runCatching { headsetVoice.close() }
         if (speakerLazy.isInitialized()) runCatching { speakerLazy.value.shutdown() }
         googleSession?.stop()

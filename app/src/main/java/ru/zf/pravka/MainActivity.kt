@@ -89,14 +89,10 @@ import ru.zf.pravka.data.PromptStore
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.data.Stats
 import ru.zf.pravka.trigger.PravkaAccessibilityService
-import ru.zf.pravka.ui.CostAction
-import ru.zf.pravka.ui.ExportAction
 import ru.zf.pravka.ui.Feedback
 import ru.zf.pravka.ui.ModeDecor
 import ru.zf.pravka.ui.ModeFrame
 import ru.zf.pravka.ui.PravkaTheme
-import ru.zf.pravka.ui.SettingsAction
-import ru.zf.pravka.ui.StatsAction
 import ru.zf.pravka.ui.TabHeader
 import ru.zf.pravka.ui.Glyphs
 import ru.zf.pravka.ui.bevel
@@ -250,7 +246,6 @@ class MainActivity : ComponentActivity() {
         intent?.getStringExtra(EXTRA_SETTINGS_GROUP)?.let { name ->
             SettingsGroup.entries.firstOrNull { it.name == name }
         }
-    private val foodActionRequest = mutableStateOf("")
 
     private fun tabOf(intent: android.content.Intent?): Tab? =
         when (intent?.getStringExtra(EXTRA_TAB)) {
@@ -292,9 +287,6 @@ class MainActivity : ComponentActivity() {
         if (foodToQuick(intent)) return
         tabOf(intent)?.let { tabRequest.value = it }
         groupOf(intent)?.let { groupRequest.value = it }
-        intent.getStringExtra(EXTRA_FOOD_ACTION)?.takeIf { it.isNotBlank() }?.let {
-            foodActionRequest.value = it
-        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -305,10 +297,8 @@ class MainActivity : ComponentActivity() {
             return
         }
         val app = application as PravkaApp
-        val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
-        // Без явной просьбы открываем таймшит: это экран, который он смотрит
-        // каждый день, всё остальное — служебное.
-        val initialTab = tabOf(intent) ?: Tab.TODAY
+        // Своих экранов нет (22.10.2026): просьба снаружи — страница сервера или «Телефон» (MainScreen).
+        tabOf(intent)?.let { tabRequest.value = it }
         groupOf(intent)?.let { groupRequest.value = it }
         // Почерк значков — до первого кадра (версия 3): иначе на холодном
         // старте первый кадр рисовался бы заводским почерком и значки
@@ -355,27 +345,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                 MainScreen(
                     app = app,
-                    initialTab = initialTab,
-                    foodAction = foodAction,
                     tabRequest = tabRequest.value,
                     onTabRequestHandled = { tabRequest.value = null },
                     groupRequest = groupRequest.value,
                     onGroupRequestHandled = { groupRequest.value = null },
-                    foodActionRequest = foodActionRequest.value,
-                    onFoodActionHandled = { foodActionRequest.value = "" },
-                    settings = app.settings,
-                    promptStore = app.promptStore,
-                    stats = app.stats,
-                    dictionaryStore = app.dictionaryStore,
-                    historyLog = app.historyLog,
-                    dictMiner = app.dictMiner,
-                    learnStore = app.learnStore,
-                    rulesStore = app.rulesStore,
-                    transcriptionLog = app.transcriptionLog,
-                    liveDraft = app.liveDraft,
-                    eventLog = app.eventLog,
-                    whisperProvider = app.whisperProvider,
-                    recordings = app.recordings,
                     serviceEnabled = serviceEnabled.value,
                     notifEnabled = notifEnabled.value,
                     onFixNotifications = { fixNotifications() },
@@ -448,298 +421,43 @@ internal enum class Tab(val titleRes: Int) {
 }
 
 /**
- * Что живёт под «Ещё»: всё, что обслуживает Правку, а не день. Порядок — по
- * тому, как часто туда правда заходят; общие настройки — последними: у
- * каждого режима есть своя шестерёнка в шапке, сюда ходят за ключом и службой.
- *
- * Снято 15.09.2026: «Паттерны» (и их ночной поиск), «Выгрузки» (книга Excel
- * теперь за значком выгрузки в Общей статистике), «Статистика» (деньги — за
- * долларом в шапке любой вкладки).
+ * Вкладка прежней Правки → страница сервера, куда теперь ведёт просьба «открыть …» с кнопки, уведомления или
+ * виджета (22.10.2026). Дел здесь нет: их страница и есть дом.
  */
-private val SERVICE_TABS = listOf(
-    // «Общая статистика» в списке не нужна (владелец, 15.09): к ней ведёт
-    // значок статистики в шапке Засечки, Дел, Спорта и Еды.
-    // «Разборы» — первыми: утренний отчёт ночного разбора и тени читается каждый день
-    // (владелец, 16.09: «это не в Ещё → Разборы, как я просил»).
-    Tab.REVIEWS,
-    // «Где мы» — семья на карте (10.10.2026): служебная страница под «Ещё», полка «семья».
-    Tab.WHERE,
-    Tab.DICTIONARY,
-    Tab.PROMPTS,
-    Tab.LEARNING,
-    Tab.LOGS,
-    Tab.FEEDBACK,
-    Tab.SETTINGS,
+private val TAB_PAGE = mapOf(
+    Tab.TODAY to "today", Tab.ZASECHKA to "zasechka", Tab.PRAVKA to "pravka",
+    Tab.FOOD to "eda", Tab.MONEY to "dengi", Tab.SPORT to "sport",
 )
 
-/** Режим профиля, которому принадлежит вкладка; null — вкладка есть всегда. */
-private fun modeOf(tab: Tab): ru.zf.pravka.data.Profile.Mode? = when (tab) {
-    Tab.ZASECHKA -> ru.zf.pravka.data.Profile.Mode.ZASECHKA
-    Tab.TODOIST -> ru.zf.pravka.data.Profile.Mode.DELA
-    Tab.SPORT -> ru.zf.pravka.data.Profile.Mode.SPORT
-    Tab.FOOD -> ru.zf.pravka.data.Profile.Mode.FOOD
-    Tab.MONEY -> ru.zf.pravka.data.Profile.Mode.MONEY
-    else -> null
-}
-
-/** Режим вкладки: узор плашек и краска. Служебное — в родном оранжевом. */
-private fun decorOf(tab: Tab): ModeDecor = when (tab) {
-    Tab.PRAVKA -> ModeDecor.PRAVKA
-    Tab.ZASECHKA -> ModeDecor.ZASECHKA
-    Tab.TODOIST -> ModeDecor.DELA
-    Tab.SPORT -> ModeDecor.SPORT
-    Tab.FOOD -> ModeDecor.FOOD
-    Tab.MONEY -> ModeDecor.MONEY
-    else -> ModeDecor.SERVICE
-}
-
-/** Одна строка про то, зачем эта вкладка — чтобы не открывать её наугад. */
-private fun serviceHint(tab: Tab): String = when (tab) {
-    Tab.REPORT -> "день в графиках и тот же день неделю назад"
-    Tab.SETTINGS -> "режимы, голос и Claude, подключения, кнопки"
-    Tab.DICTIONARY -> "как писать имена и термины"
-    Tab.PROMPTS -> "тексты запросов ко всем режимам"
-    Tab.LEARNING -> "разбор твоих правок и принятые правила"
-    Tab.REVIEWS -> "что Правка сама выучила, разобрать сейчас"
-    Tab.LOGS -> "что делала служба, выгрузки для разбора"
-    Tab.SHOWCASE -> "все детали набора во всех состояниях"
-    Tab.FEEDBACK -> "сказанное с кнопок — раз в день в разбор"
-    Tab.WHERE -> "семья на карте: кто где сейчас"
-    else -> ""
-}
-
-/** Экран поверх нижней вкладки: служебный из «Ещё», настройки одного режима или стоимость. */
+/**
+ * Экран поверх дома: «Телефон» (группы настроек строками) или одна группа.
+ */
 private sealed class Page {
-    data class Service(val tab: Tab) : Page()
-    data class ModeSettings(val group: SettingsGroup) : Page()
-    data object Cost : Page()
-}
-
-/** Значок служебного экрана — тот же, что у него в шапке. */
-private fun serviceGlyph(tab: Tab): androidx.compose.ui.graphics.vector.ImageVector = when (tab) {
-    Tab.REVIEWS -> Glyphs.Moon
-    Tab.WHERE -> Glyphs.Family
-    Tab.DICTIONARY -> Glyphs.Dictionary
-    Tab.PROMPTS -> Glyphs.Scroll
-    Tab.LEARNING -> Glyphs.Learn
-    Tab.LOGS -> Glyphs.ListLines
-    Tab.SETTINGS -> Glyphs.Gear
-    Tab.REPORT -> Glyphs.Stats
-    Tab.STATS -> Glyphs.Stats
-    Tab.FEEDBACK -> Glyphs.Bug
-    else -> Glyphs.More
+    data object Phone : Page()
+    data class Group(val group: SettingsGroup) : Page()
 }
 
 /**
- * «Ещё» (аватар «С», DESIGN §12.10): Правка — вход в режим и Общая
- * статистика, полки «Правка изнутри» и «Служебное», профиль «кто
- * пользуется». Цвет — Правки.
+ * Приложение целиком (22.10.2026, Правка на диете): дом — страница Дел сервера, поверх него — страница сервиса из меню
+ * Ковчега или «Телефон» с настройками. Своих экранов режимов нет: живая часть Правки — кнопки на стекле.
  */
-@Composable
-private fun MoreList(app: PravkaApp, onOpen: (Tab) -> Unit, onMode: (Tab) -> Unit, onProfile: () -> Unit) {
-    val profile by app.profileStore.flow.collectAsState()
-    // Красная точка на «Разборах» — та же, что на «С» в «Сегодня» (12.10.2026).
-    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
-    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
-    val reviewsNews = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
-    // Разворот: слева Правка, статистика и «кто пользуется», справа полки.
-    ru.zf.pravka.ui.SplitColumns { side ->
-        val left = side != 2
-        val right = side != 1
-        if (left) ru.zf.pravka.ui.PaperCard {
-            PaperRow(
-                title = stringResource(R.string.tab_pravka),
-                hint = "чистка текста, расшифровки",
-                icon = Glyphs.Pravka,
-                onClick = { onMode(Tab.PRAVKA) },
-            )
-            RowRule()
-            PaperRow(
-                title = stringResource(R.string.tab_report),
-                hint = serviceHint(Tab.REPORT),
-                icon = Glyphs.Stats,
-                onClick = { onOpen(Tab.REPORT) },
-            )
-        }
-        if (right) for ((label, items) in MORE_SHELVES) {
-            ru.zf.pravka.ui.PaperCard(label = label) {
-                items.forEachIndexed { i, item ->
-                    if (i > 0) RowRule()
-                    PaperRow(
-                        title = stringResource(item.titleRes),
-                        hint = serviceHint(item),
-                        icon = serviceGlyph(item),
-                        onClick = { onOpen(item) },
-                        trailing = if (item == Tab.REVIEWS && reviewsNews) ({ ru.zf.pravka.ui.NewsDotMark() }) else null,
-                    )
-                }
-            }
-        }
-        if (left) ru.zf.pravka.ui.PaperCard(label = "кто пользуется") {
-            PaperRow(
-                title = profile?.name?.takeIf { it.isNotBlank() } ?: "Профиль",
-                hint = "имя, режимы",
-                icon = Glyphs.Key,
-                onClick = onProfile,
-            )
-        }
-    }
-}
-
-/**
- * Служебные экраны бывшего «Ещё» для «Телефона» (вид v2): Правка и Общая
- * статистика, затем полки «Ещё» без «Настроек» — группы и так на экране.
- */
-@Composable
-private fun phoneLinks(app: PravkaApp, openService: (Tab) -> Unit, openMode: (Tab) -> Unit): List<Pair<String, List<PhoneLink>>> {
-    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
-    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
-    val reviewsNews = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
-    val pravka = PhoneLink(stringResource(R.string.tab_pravka), "чистка текста, расшифровки", Glyphs.Pravka, onClick = { openMode(Tab.PRAVKA) })
-    val report = PhoneLink(stringResource(R.string.tab_report), serviceHint(Tab.REPORT), Glyphs.Stats, onClick = { openService(Tab.REPORT) })
-    return listOf("Правка" to listOf(pravka, report)) + MORE_SHELVES.map { (label, items) ->
-        label.replaceFirstChar { it.uppercase() } to items.filter { it != Tab.SETTINGS }.map { t ->
-            PhoneLink(stringResource(t.titleRes), serviceHint(t), serviceGlyph(t), news = t == Tab.REVIEWS && reviewsNews, onClick = { openService(t) })
-        }
-    }
-}
-
-private val MORE_SHELVES: List<Pair<String, List<Tab>>> = listOf(
-    "семья" to listOf(Tab.WHERE),
-    "правка изнутри" to listOf(Tab.REVIEWS, Tab.DICTIONARY, Tab.PROMPTS, Tab.LEARNING),
-    "служебное" to listOfNotNull(Tab.FEEDBACK, Tab.LOGS, Tab.SETTINGS, Tab.SHOWCASE.takeIf { BuildConfig.DEBUG }),
-)
-
-/**
- * Единственная выгрузка приложения — вся жизнь одной книгой Excel. Живёт за
- * значком выгрузки в шапке «Общей статистики» (владелец, 15.09: «выгрузки я бы
- * сделал в виде иконки справа вверху в статистике»).
- *
- * Владелец (09.09): «уберём все эти экспорты csv и сводки, я ими не пользуюсь,
- * и сделаем один экспорт, который будет экспортировать всё то, что в Notion…
- * мне надоел этот Notion, в Excel мне как-то удобнее». Notion с 12.10.2026
- * убран; книгу собирает `LifeExport` по схеме `LifeSchema`: лист на лист,
- * колонка в колонку, свежее сверху.
- */
-@Composable
-private fun LifeExportDialog(app: PravkaApp, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    var busy by remember { mutableStateOf(false) }
-    var lastError by remember { mutableStateOf("") }
-    val export: () -> Unit = {
-        busy = true
-        lastError = ""
-        app.appScope.launch {
-            val intent = runCatching { app.lifeExport.shareIntent() }
-                .onFailure { e ->
-                    // Причина целиком: «не собрался» без причины читается как поломка.
-                    lastError = "Не собралась: ${e.javaClass.simpleName}: ${e.message}"
-                    app.eventLog.add("выгрузка xlsx: $lastError")
-                }
-                .getOrNull()
-            busy = false
-            if (intent != null) {
-                onDismiss()
-                runCatching {
-                    context.startActivity(
-                        android.content.Intent.createChooser(intent, "Вся жизнь (.xlsx)")
-                    )
-                }
-            }
-        }
-    }
-    PaperAlert(
-        onDismiss = onDismiss,
-        title = "Вся жизнь одной книгой",
-        icon = Glyphs.Export,
-        subtitle = "одна книга .xlsx",
-        confirm = SheetAction(if (busy) "Собираю…" else "Выгрузить .xlsx", icon = Glyphs.Export, enabled = !busy, onClick = export),
-    ) {
-        HintText(
-            "Листы " +
-                ru.zf.pravka.core.LifeSchema.ALL.joinToString(", ") { it.name } +
-                ". Свежее сверху, шапка закреплена, фильтр включён."
-        )
-        if (lastError.isNotBlank()) {
-            Text(
-                lastError,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
-        }
-    }
-}
-
 @Composable
 private fun MainScreen(
     app: PravkaApp,
-    initialTab: Tab,
-    foodAction: String = "",
     tabRequest: Tab? = null,
     onTabRequestHandled: () -> Unit = {},
     groupRequest: SettingsGroup? = null,
     onGroupRequestHandled: () -> Unit = {},
-    foodActionRequest: String = "",
-    onFoodActionHandled: () -> Unit = {},
-    settings: Settings,
-    promptStore: PromptStore,
-    stats: Stats,
-    dictionaryStore: DictionaryStore,
-    historyLog: HistoryLog,
-    dictMiner: ru.zf.pravka.provider.DictMiner,
-    learnStore: ru.zf.pravka.data.LearnStore,
-    rulesStore: ru.zf.pravka.data.RulesStore,
-    transcriptionLog: ru.zf.pravka.data.TranscriptionLog,
-    liveDraft: ru.zf.pravka.data.LiveDraft,
-    eventLog: ru.zf.pravka.data.EventLog,
-    whisperProvider: ru.zf.pravka.provider.WhisperProvider,
-    recordings: ru.zf.pravka.data.Recordings,
     serviceEnabled: Boolean,
-    notifEnabled: Boolean = true,
-    onFixNotifications: () -> Unit = {},
+    notifEnabled: Boolean,
+    onFixNotifications: () -> Unit,
     onOpenAccessibilitySettings: () -> Unit,
 ) {
-    // Кто пользуется (data/Profile.kt): свежая установка сначала спрашивает —
-    // пока не ответили, остального приложения нет, иначе оно завелось бы с
-    // заводскими владельца и мужским родом в чистке.
-    val profile by app.profileStore.flow.collectAsState()
-    val asking by app.profileStore.asking.collectAsState()
-    if (profile == null && asking) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-            ModeFrame(ModeDecor.SERVICE) { ProfileOnboarding(app) }
-        }
-        return
-    }
-    // Режим, выключенный в профиле, не открывается ни плашкой, ни по ссылке
-    // из уведомления — тогда «Сегодня».
-    val live: (Tab) -> Boolean = { t -> modeOf(t)?.let { m -> profile?.has(m) ?: true } ?: true }
-    // Правка 4.0 (07.10.2026, DESIGN §1): главный экран — «Сегодня», режимы —
-    // линзы на этот день поверх него; нижней панели и колонки нет. Служебные
-    // экраны — стопкой поверх (как раньше). Ссылка снаружи (уведомление, меню
-    // кнопки) может показывать прямо на служебную — тогда «Сегодня» и над ним
-    // она.
-    val service = remember { SERVICE_TABS }
-    var tab by remember {
-        mutableStateOf(
-            when {
-                initialTab in service -> Tab.TODAY
-                initialTab == Tab.MORE -> Tab.TODAY
-                live(initialTab) -> initialTab
-                else -> Tab.TODAY
-            }
-        )
-    }
-    LaunchedEffect(profile, tab) {
-        if (!live(tab)) tab = Tab.TODAY
-    }
-    var pages by remember {
-        mutableStateOf<List<Page>>(if (initialTab in service) listOf(Page.Service(initialTab)) else emptyList())
-    }
+    var pages by remember { mutableStateOf<List<Page>>(emptyList()) }
     val page = pages.lastOrNull()
     val pop = { pages = pages.dropLast(1) }
-    // Страница сервиса внутри приложения (14.10.2026, `ServiceWebScreen.kt`): Встречи, Шаббат, Дети… —
-    // экраном поверх вкладки, как пункт меню Ковчега. Сохраняется в состоянии: складывание Fold
-    // пересоздаёт активити, и без этого страница закрылась бы на полуслове.
+    // Страница сервиса внутри приложения (14.10.2026, `ServiceWebScreen.kt`): сохраняется в состоянии — складывание
+    // Fold пересоздаёт активити, и без этого страница закрылась бы на полуслове.
     var web by androidx.compose.runtime.saveable.rememberSaveable(stateSaver = ServicePageSaver) {
         mutableStateOf<ru.zf.pravka.core.ServicePage?>(null)
     }
@@ -749,315 +467,28 @@ private fun MainScreen(
     val openServicePage: (ru.zf.pravka.core.ServicePage) -> Unit = { s ->
         openService(webContext, s, servicesInBrowser.value) { web = it; pages = emptyList() }
     }
-    var foodActionPending by remember { mutableStateOf(foodAction.ifBlank { null }) }
-    // Глубокие переходы с «Сегодня»: запись Засечки на правку, дело карточкой.
-    var zasechkaEdit by remember { mutableStateOf<Long?>(null) }
-    var delaOpen by remember { mutableStateOf<String?>(null) }
-    var dictationExport by remember { mutableStateOf(false) }
-    var lifeExport by remember { mutableStateOf(false) }
-    var moneyExport by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { runCatching { app.updates.tick() } }
-    // Приехавшая сборка отмечает починенные баги сразу при запуске
-    // (`feedback_done.txt`), а не когда откроют список: история в «Настройки →
-    // Баги» датируется днём сборки, а на комп уходит «сделано» без задержки.
-    LaunchedEffect(Unit) { runCatching { app.feedbackStore.load() } }
-
+    // Просьба снаружи (меню кнопки, уведомление, виджет): «Настройки» — «Телефон», режим — его страница сервера
+    // («Открыть Засечку» — веб Засечки), страницы нет — дом.
     LaunchedEffect(tabRequest) {
         val want = tabRequest ?: return@LaunchedEffect
-        if (want in service) {
-            pages = listOf(Page.Service(want))
-            web = null
-        } else {
-            tab = if (live(want)) want else Tab.TODAY
-            web = null
-            pages = emptyList()
+        pages = if (want == Tab.SETTINGS || want == Tab.MORE) listOf(Page.Phone) else emptyList()
+        web = TAB_PAGE[want]?.let { key ->
+            ru.zf.pravka.core.Kovcheg.pageFor(key, app.delaSync.services.value, app.delaSync.link.value?.url)
         }
         onTabRequestHandled()
     }
     LaunchedEffect(groupRequest) {
         val g = groupRequest ?: return@LaunchedEffect
-        pages = listOf(Page.Service(Tab.SETTINGS), Page.ModeSettings(g))
+        pages = listOf(Page.Phone, Page.Group(g))
         web = null
         onGroupRequestHandled()
     }
-    LaunchedEffect(foodActionRequest) {
-        if (foodActionRequest.isBlank()) return@LaunchedEffect
-        foodActionPending = foodActionRequest
-        onFoodActionHandled()
-    }
-    // «Назад»: верхний экран стопки, потом — из режима на «Сегодня» (DESIGN §1).
-    BackHandler(enabled = pages.isNotEmpty() || tab != Tab.TODAY) {
-        if (pages.isNotEmpty()) pop() else tab = Tab.TODAY
-    }
+    BackHandler(enabled = pages.isNotEmpty()) { pop() }
 
-    val openMode: (Tab) -> Unit = { t -> if (live(t)) { tab = t; pages = emptyList(); web = null } }
-    val toToday = { tab = Tab.TODAY; pages = emptyList(); web = null }
-    // Вид v2 (Правка 5.0, план §3): у режима в шапке значок Ковчега, а не «‹» —
-    // назад остаётся системным жестом, переходы — через меню. В «Виде 4.0» — как было.
-    val modeBack: (() -> Unit)? = if (ru.zf.pravka.ui.Look.v4) toToday else null
     // Меню Ковчега — одно на приложение, поверх любого экрана.
     var menuOpen by remember { mutableStateOf(false) }
-    // Раздел Дел, который открыть из меню («CRM»).
-    var delaNav by remember { mutableStateOf<String?>(null) }
-    // Вид v2 (этап 6): вкладки «Тела» на сложенном — одни у Спорта и Еды
-    // («Спорт · Путь · Журнал · Еда»), поэтому часть Спорта живёт здесь: «Путь»
-    // с экрана Еды открывает Спорт сразу на «Пути».
-    var bodyPart by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
-    val openCost = { pages = pages + Page.Cost }
-    val openReport = { pages = pages + Page.Service(Tab.REPORT) }
-    val todayNav = remember {
-        TodayNav(
-            mode = { t -> openMode(t) },
-            more = { pages = listOf(Page.Service(Tab.MORE)) },
-            stats = { pages = listOf(Page.Service(Tab.REPORT)) },
-            zasechkaEntry = { id -> zasechkaEdit = id; openMode(Tab.ZASECHKA) },
-            foodAction = { a -> foodActionPending = a; openMode(Tab.FOOD) },
-            delaTask = { id -> delaOpen = id; openMode(Tab.TODOIST) },
-            // Дайджест → «Открыть «Новое»»: вкладка Дел сразу на пачке этой сводки (`#/new/<batch_ref>` веба).
-            delaBatch = { ref -> delaNav = NEW_BATCH + ref; openMode(Tab.TODOIST) },
-            web = openServicePage,
-            cost = openCost,
-        )
-    }
-
-    // Карусель (баг №12, 07.10.2026, владелец: «когда я смахиваю вправо по
-    // текущему дню, я попадал в дела… дальше вправо — в спорт, потом в еду,
-    // потом в деньги, и наоборот… и бэком я возвращаюсь к текущему дню»):
-    // «Сегодня» и четыре режима плашек листаются вбок. Засечка и Правка —
-    // не в ней: у них свои входы (пилюля «+84», «Ещё»). Выключенный в
-    // профиле режим из карусели выпадает.
-    val ring = remember(profile) { RING.filter(live) }
-    // Экран режима — один на все входы: прямой (Засечка, Правка) и в карусели.
-    val modeScreen: @Composable (Tab) -> Unit = { t ->
-        ModeFrame(decorOf(t)) {
-            Column(Modifier.fillMaxSize()) {
-                when (t) {
-                    Tab.PRAVKA -> {
-                        val pravkaActions: @Composable RowScope.() -> Unit = {
-                            StatsAction { pages = listOf(Page.Service(Tab.STATS)) }
-                            CostAction(openCost)
-                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.PRAVKA)) }
-                        }
-                        if (ru.zf.pravka.ui.Look.v2) {
-                            // Правка 5.0, этап 5: история всех диктовок — телефона и компьютера (`PravkaHistory.kt`).
-                            PravkaHistoryScreen(app, serviceEnabled) { sub ->
-                                TabHeader(title = stringResource(R.string.tab_pravka), onBack = modeBack, titleExtra = sub, actions = pravkaActions)
-                            }
-                        } else {
-                            val cleanFlow = remember { app.settings.modelChoiceFlow(ru.zf.pravka.data.ModelRoute.PRAVKA) }
-                            val clean by cleanFlow.collectAsState(initial = null)
-                            TabHeader(
-                                title = stringResource(R.string.tab_pravka),
-                                onBack = modeBack,
-                                titleExtra = clean?.let { c ->
-                                    ru.zf.pravka.data.Models.label(c.model).substringBefore(' ') + " · " +
-                                        ru.zf.pravka.data.Models.effectiveEffort(c.model, c.effort)
-                                },
-                                onTitleExtra = { pages = listOf(Page.ModeSettings(SettingsGroup.MODELS)) },
-                                actions = pravkaActions,
-                            )
-                            PravkaTab(app, serviceEnabled)
-                        }
-                    }
-                    Tab.ZASECHKA -> {
-                        val zasechkaActions: @Composable RowScope.() -> Unit = {
-                            StatsAction(openReport)
-                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) }
-                        }
-                        val zasechkaTitle = stringResource(R.string.tab_zasechka)
-                        if (ru.zf.pravka.ui.Look.v2) {
-                            // Вид v2 (этап 3, холст `Zasechka.dc.html`): шапку рисует вкладка — подпись
-                            // «день · очки» и навигатор дня по тапу на название знает только она.
-                            ZasechkaTab(
-                                app,
-                                editEntry = zasechkaEdit,
-                                onEditHandled = { zasechkaEdit = null },
-                                header = { sub, onTitle, onTitleDouble ->
-                                    ru.zf.pravka.ui.KovchegHeader(
-                                        title = zasechkaTitle,
-                                        subtitle = sub,
-                                        onTitle = onTitle,
-                                        onTitleDouble = onTitleDouble,
-                                        actions = zasechkaActions,
-                                        modifier = Modifier.statusBarsPadding(),
-                                    )
-                                },
-                                nav = todayNav,
-                                onSettings = { pages = listOf(Page.ModeSettings(SettingsGroup.ZASECHKA)) },
-                            )
-                        } else {
-                            TabHeader(title = zasechkaTitle, onBack = modeBack, actions = zasechkaActions)
-                            ZasechkaTab(app, editEntry = zasechkaEdit, onEditHandled = { zasechkaEdit = null })
-                        }
-                    }
-                    Tab.TODOIST -> {
-                        val delaActions: @Composable RowScope.() -> Unit = {
-                            StatsAction(openReport)
-                            CostAction(openCost)
-                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.DELA)) }
-                        }
-                        // Дела на домашнем сервере или Todoist — выбор в
-                        // «Подключениях» (03.10.2026); Todoist — запасной путь.
-                        // У своего сервера шапку рисует вкладка: вторым тоном
-                        // в ней сфера (макет 06 — «Дела Все сферы ⌄»).
-                        val onServer by app.delaServer.collectAsState()
-                        // Дела в виде Todoist (19.10.2026, core/DelaWeb.kt): сервер умеет /t и владелец не выключил
-                        // новый вид — вкладка показывает страницу сервера внутри Правки; иначе — прежняя родная вкладка.
-                        val delaWebWanted by app.settings.delaWebFlow.collectAsState(initial = true)
-                        val delaLink by app.delaSync.link.collectAsState()
-                        val delaSnap by app.delaStore.view.collectAsState()
-                        val delaBase = delaLink?.url
-                        if (delaBase != null && ru.zf.pravka.core.DelaWeb.show(onServer, true, delaSnap.features, delaWebWanted)) {
-                            DelaWebTab(
-                                app,
-                                base = delaBase,
-                                openTaskId = delaOpen,
-                                onOpenHandled = { delaOpen = null; delaNav = null },
-                                onClose = modeBack ?: toToday,
-                            )
-                        } else if (onServer) {
-                            DelaTab(
-                                app,
-                                openTaskId = delaOpen,
-                                onOpenHandled = { delaOpen = null },
-                                openNav = delaNav,
-                                onNavHandled = { delaNav = null },
-                                header = { sub, onSub, lead ->
-                                    TabHeader(title = "Дела", onBack = modeBack, titleExtra = sub, onTitleExtra = onSub, actions = delaActions, lead = lead)
-                                },
-                            )
-                        } else {
-                            TabHeader(title = "Дела", onBack = modeBack, actions = delaActions)
-                            TodoistTab(app)
-                        }
-                    }
-                    Tab.SPORT -> {
-                        val sportActions: @Composable RowScope.() -> Unit = {
-                            StatsAction(openReport)
-                            CostAction(openCost)
-                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.SPORT)) }
-                        }
-                        if (ru.zf.pravka.ui.Look.v2) {
-                            // Вид v2 (этап 6, холст `Sport.dc.html`): шапку с названием и сегментом
-                            // периода рисует вкладка, вкладки «Тела» — тоже она.
-                            SportTab(
-                                app,
-                                header = { title, sub, extra ->
-                                    TabHeader(title = title, onBack = modeBack, titleExtra = sub, actions = { extra(); sportActions() })
-                                },
-                                bodyPart = bodyPart,
-                                onBodyPart = { bodyPart = it },
-                                onFood = if (live(Tab.FOOD)) ({ openMode(Tab.FOOD) }) else null,
-                                // Пустой план недели → «Повторить прошлую» в «Спорте» на компе (страницей внутри приложения).
-                                onWeb = openServicePage,
-                            )
-                        } else {
-                            TabHeader(
-                                title = stringResource(R.string.tab_sport),
-                                onBack = modeBack,
-                                // Вторым тоном — неделя года, как в макете 09 («Неделя 41»).
-                                titleExtra = "Неделя " + java.time.LocalDate.now().get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear()),
-                                actions = sportActions,
-                            )
-                            SportTab(app)
-                        }
-                    }
-                    Tab.MONEY -> {
-                        val pOn by app.settings.mScopePersonalFlow.collectAsState(initial = true)
-                        val zOn by app.settings.mScopeZfFlow.collectAsState(initial = false)
-                        var scopeSheet by remember { mutableStateOf(false) }
-                        val moneyActions: @Composable RowScope.() -> Unit = {
-                            ExportAction { moneyExport = true }
-                            StatsAction(openReport)
-                            CostAction(openCost)
-                            SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.MONEY)) }
-                        }
-                        if (ru.zf.pravka.ui.Look.v2) {
-                            // Вид v2 (этап 6, холст `Dengi.dc.html`): подпись шапки — период, тап — выбор
-                            // периода; «Личное · ЗФ · Всё» — сегментом (в шапке на развороте, в «По статьям»
-                            // на сложенном). Шапку с ними рисует вкладка.
-                            MoneyTab(
-                                app,
-                                exportRequested = moneyExport,
-                                onExportHandled = { moneyExport = false },
-                                header = { sub, onSub, extra ->
-                                    TabHeader(
-                                        title = stringResource(R.string.tab_money),
-                                        onBack = modeBack,
-                                        titleExtra = sub,
-                                        onTitleExtra = onSub,
-                                        actions = { extra(); moneyActions() },
-                                    )
-                                },
-                                onBudget = { pages = listOf(Page.ModeSettings(SettingsGroup.TODAY)) },
-                                // Разделы веба «Деньги» (P&L, доля, «чего не видим») — страницей сервиса внутри приложения.
-                                onWeb = openServicePage,
-                            )
-                        } else {
-                            TabHeader(
-                                title = stringResource(R.string.tab_money),
-                                onBack = modeBack,
-                                titleExtra = when {
-                                    pOn && zOn -> "Всё"
-                                    zOn -> "ЗФ"
-                                    else -> "Личное"
-                                },
-                                onTitleExtra = { scopeSheet = true },
-                                actions = moneyActions,
-                            )
-                            MoneyTab(
-                                app,
-                                exportRequested = moneyExport,
-                                onExportHandled = { moneyExport = false },
-                            )
-                        }
-                        if (scopeSheet) MoneyScopeSheet(app, pOn, zOn, onDismiss = { scopeSheet = false })
-                    }
-                    else -> {
-                        // Шапку рисует вкладка: вторым тоном — день дневника (макет 10).
-                        // Вид v2 на сложенном (холст `Eda.dc.html`): Еда — вкладка «Тела»
-                        // рядом со Спортом, шапка «Тело»; на развороте — свой экран «Еда».
-                        val bodyFolded = ru.zf.pravka.ui.Look.v2 && !ru.zf.pravka.ui.twoPane() && live(Tab.SPORT)
-                        val foodTitle = if (bodyFolded) "Тело" else stringResource(R.string.tab_food)
-                        FoodTab(
-                            app,
-                            autoAction = foodActionPending,
-                            onAutoConsumed = { foodActionPending = null },
-                            bodyTabs = if (!bodyFolded) null else ({
-                                BodyTabs(
-                                    selected = BODY_FOOD,
-                                    onSelect = { i -> if (i != BODY_FOOD) { bodyPart = i; openMode(Tab.SPORT) } },
-                                    food = true,
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                )
-                            }),
-                            header = { day, onDay, extra ->
-                                TabHeader(
-                                    title = foodTitle,
-                                    onBack = modeBack,
-                                    titleExtra = day,
-                                    onTitleExtra = onDay,
-                                    actions = {
-                                        // Вид v2 на развороте — сегмент «День · Неделя · Рацион» перед значками.
-                                        extra()
-                                        StatsAction(openReport)
-                                        CostAction(openCost)
-                                        SettingsAction { pages = listOf(Page.ModeSettings(SettingsGroup.FOOD)) }
-                                    },
-                                )
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    // Меню Ковчега: что в нём и куда ведёт (`core/Kovcheg.kt`), новенькое — новый разбор.
-    val reviewRuns by app.nightReviewStore.runsFlow.collectAsState()
-    val reviewsSeenAt by app.settings.reviewsSeenAtFlow.collectAsState(initial = Long.MAX_VALUE)
-    val news = ru.zf.pravka.core.ReviewDigest.hasNews(reviewRuns, reviewsSeenAt)
     BackHandler(enabled = menuOpen) { menuOpen = false }
     // Значок Ковчега — картинкой с сервера (в публичном репозитории его нет); пока не пришла — запасной.
     val brandBytes by app.delaSync.brandIcon.collectAsState()
@@ -1065,92 +496,40 @@ private fun MainScreen(
         brandBytes?.let { b -> runCatching { android.graphics.BitmapFactory.decodeByteArray(b, 0, b.size) }.getOrNull() }
             ?.asImageBitmap()
     }
-    val host = ru.zf.pravka.ui.KovchegHost(toggle = { menuOpen = !menuOpen }, isOpen = menuOpen, news = news, icon = brand)
-
-    // Режим отладки на всех экранах (16.10.2026, docs/dela-phone-24.md): каждому экрану — строка «Что не так?» под
-    // шапкой со своим маршрутом (`DebugScreen`), переходы между экранами — в действия записки. Вкладка Дел на своём
-    // сервере рисует свою строку со снимком Дел — общей там нет.
-    val delaOnServer by app.delaServer.collectAsState()
-    val bodyPartName = BODY_PART_NAMES.getOrNull(bodyPart)
-    val atOf: (ru.zf.pravka.core.ServicePage?, Page?, Tab) -> ru.zf.pravka.core.ScreenDebug.At? = { w, p, t ->
-        val stack = pages.map(::pageKey)
-        ru.zf.pravka.core.ScreenDebug.at(
-            tab = screenKey(t),
-            pages = when {
-                p == null -> emptyList()
-                stack.lastOrNull() == pageKey(p) -> stack
-                else -> listOf(pageKey(p))
-            },
-            web = w?.name,
-            delaOwn = delaOnServer,
-            mode = buildMap {
-                if (w != null) put("url", ru.zf.pravka.core.ScreenDebug.url(w.url))
-                if (p == null && w == null && (t == Tab.SPORT || t == Tab.FOOD)) put("body_part", if (t == Tab.FOOD) "Еда" else bodyPartName)
-            },
-        )
-    }
-    val navRoute = web?.let { "web:${it.name}" } ?: page?.let { "app:page:" + pageKey(it) } ?: ("app:" + screenKey(tab))
-    val navTitle = when (val p = page) {
-        null -> web?.name ?: if (tab == Tab.TODOIST) "Дела" else stringResource(tab.titleRes)
-        is Page.ModeSettings -> p.group.title
-        is Page.Cost -> "Claude: траты"
-        is Page.Service -> if (ru.zf.pravka.ui.Look.v2 && (p.tab == Tab.MORE || p.tab == Tab.SETTINGS)) "Телефон" else stringResource(p.tab.titleRes)
-    }
-    LaunchedEffect(navRoute) { ru.zf.pravka.core.ScreenDebug.noteNav(navRoute, navTitle) }
+    val host = ru.zf.pravka.ui.KovchegHost(toggle = { menuOpen = !menuOpen }, isOpen = menuOpen, news = false, icon = brand)
 
     // Клавиатура — один раз и здесь (отладка 16.10.2026 вечер, запись 26): окно с `adjustResize` не сдвигается, а
-    // экраны кончаются над клавиатурой, как при старом «сжатии окна». imePadding у корня ПОГЛОЩАЕТ отступ клавиатуры:
-    // `imePadding()` строк «сказать» и `navigationBarsPadding()` ниже по дереву при открытой клавиатуре дают ноль, а
-    // без неё — как раньше. До этого окно ещё и сдвигала система (adjustPan по умолчанию), и строка «сказать»
-    // поднималась дважды: приложение уезжало высоко, между ним и клавиатурой оставалась пустая полоса.
+    // экраны кончаются над клавиатурой. imePadding у корня ПОГЛОЩАЕТ отступ клавиатуры для всего дерева ниже.
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).imePadding()) {
         androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalKovcheg provides host) {
-        // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
-        androidx.compose.animation.AnimatedContent(
-            targetState = Triple(web, page, tab),
-            transitionSpec = {
-                androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) togetherWith
-                    androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
-            },
-            // Внутри карусели смена вкладки — не смена экрана: едет пейджер.
-            // Вкладок больше нет (22.10.2026): любая вкладка — тот же дом, смена вкладки экран не пересоздаёт.
-            contentKey = { (w, p, _) -> w?.let { "web:" + it.url } ?: p?.toString() ?: "home" },
-            label = "screen",
-        ) { (w, p, t) ->
-            // Карусель — своим маршрутом на каждую страницу пейджера (ниже), остальное — здесь.
-            DebugScreen(app, if (w == null && p == null && t in ring) null else atOf(w, p, t)) {
+            // Переходы — растворением, 250 мс (DESIGN §10): экран не едет, а сменяется.
+            androidx.compose.animation.AnimatedContent(
+                targetState = web to page,
+                transitionSpec = {
+                    androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(250)) togetherWith
+                        androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
+                },
+                contentKey = { (w, p) -> w?.let { "web:" + it.url } ?: p?.toString() ?: "home" },
+                label = "screen",
+            ) { (w, p) ->
                 when {
                     w != null -> ServiceWebScreen(app, w, onClose = { web = null })
                     p != null -> PageScreen(
-                        app, p, pop, openCost,
-                        openService = { pages = pages + Page.Service(it) },
-                        openGroup = { g -> pages = pages + Page.ModeSettings(g) },
-                        openMode = { m -> openMode(m) },
+                        app, p, pop,
+                        openGroup = { g -> pages = pages + Page.Group(g) },
                         serviceEnabled = serviceEnabled,
                         onOpenAccessibilitySettings = onOpenAccessibilitySettings,
-                        dictionaryStore = dictionaryStore,
-                        historyLog = historyLog,
-                        dictMiner = dictMiner,
-                        promptStore = promptStore,
-                        dictationExport = dictationExport,
-                        onDictationExport = { dictationExport = it },
-                        onLifeExport = { lifeExport = true },
                     )
-                    // Правка на диете (22.10.2026, владелец: «я всё равно ничем там не пользуюсь внутри приложения»):
-                    // своих экранов нет — дом это страница Дел сервера (/t), остальное — страницами из меню Ковчега,
-                    // настройки — «Телефон» в том же меню. Правка сервера видна на телефоне сразу, без сборки.
+                    // Дом: страница Дел сервера (/t); «назад» с неё — свернуть приложение.
                     else -> PravkaHome(
                         app,
-                        onPhone = { web = null; pages = listOf(Page.Service(Tab.MORE)) },
+                        onPhone = { web = null; pages = listOf(Page.Phone) },
                         onLeave = { (webContext as? android.app.Activity)?.moveTaskToBack(true) },
                     )
                 }
             }
         }
-        }
-        // Лист «Отладка» (номер в строке «Что не так?») — один на приложение; во вкладке Дел его держит она сама.
-        if (!(web == null && page == null && tab == Tab.TODOIST && delaOnServer)) DelaDebugHost(app)
-        // Пуши выключены — говорим сверху, а не в глубине настроек автопилота.
+        // Пуши выключены — говорим сверху, а не в глубине настроек.
         if (!notifEnabled) {
             Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 92.dp)) {
                 NotificationsBanner(onFixNotifications)
@@ -1159,25 +538,13 @@ private fun MainScreen(
         if (menuOpen && ru.zf.pravka.ui.Look.v2) {
             KovchegMenuHost(
                 app = app,
-                live = live,
-                current = web?.url ?: if (page != null) null else kovchegKey(tab),
-                news = news,
-                onScreen = { key ->
-                    menuOpen = false
-                    when (key) {
-                        ru.zf.pravka.core.Kovcheg.TODAY -> toToday()
-                        ru.zf.pravka.core.Kovcheg.CRM -> { delaNav = "crm"; openMode(Tab.TODOIST) }
-                        else -> tabOfKovcheg(key)?.let(openMode)
-                    }
-                },
-                onPhone = { menuOpen = false; web = null; pages = listOf(Page.Service(Tab.MORE)) },
+                current = web?.url,
+                onPhone = { menuOpen = false; web = null; pages = listOf(Page.Phone) },
                 onWeb = { s -> menuOpen = false; openServicePage(s) },
                 onDismiss = { menuOpen = false },
             )
         }
     }
-
-    if (lifeExport) LifeExportDialog(app, onDismiss = { lifeExport = false })
 }
 
 /**
@@ -1208,62 +575,25 @@ private fun PravkaHome(app: PravkaApp, onPhone: () -> Unit, onLeave: () -> Unit)
     }
 }
 
-/**
- * Экран стопки поверх «Сегодня» или режима: служебный (Ещё, настройки,
- * разборы…), настройки одного режима или стоимость. «‹» и системный «назад»
- * — на шаг.
- */
+/** «Телефон» (группы настроек строками) или одна группа настроек. */
 @Composable
 private fun PageScreen(
     app: PravkaApp,
     p: Page,
     pop: () -> Unit,
-    openCost: () -> Unit,
-    openService: (Tab) -> Unit,
     openGroup: (SettingsGroup) -> Unit,
-    openMode: (Tab) -> Unit,
     serviceEnabled: Boolean,
     onOpenAccessibilitySettings: () -> Unit,
-    dictionaryStore: DictionaryStore,
-    historyLog: HistoryLog,
-    dictMiner: ru.zf.pravka.provider.DictMiner,
-    promptStore: PromptStore,
-    dictationExport: Boolean,
-    onDictationExport: (Boolean) -> Unit,
-    onLifeExport: () -> Unit,
 ) {
-    if (p is Page.Service && p.tab == Tab.SHOWCASE) {
-        ru.zf.pravka.ui.ShowcaseScreen(onBack = pop)
-        return
-    }
     val decor = when (p) {
-        is Page.ModeSettings -> p.group.decor
-        // «Ещё» — в цвете Правки (DESIGN §12.10), Общая статистика — нейтрально, как «Сегодня».
-        is Page.Service -> when (p.tab) {
-            Tab.REPORT -> ModeDecor.TODAY
-            Tab.MORE -> ModeDecor.PRAVKA
-            else -> ModeDecor.SERVICE
-        }
-        else -> ModeDecor.SERVICE
+        is Page.Group -> p.group.decor
+        Page.Phone -> ModeDecor.PRAVKA
     }
-    // «Моя точка» на карте семьи — шестерёнкой в шапке, окно открывает сама вкладка.
-    var whereSettings by remember { mutableStateOf(false) }
     ModeFrame(decor) {
         Column(Modifier.fillMaxSize()) {
             when (p) {
-                is Page.Cost -> {
-                    // Одна страница трат на все входы (значок на «Сегодня», «$» в шапках режимов): все службы и телефон,
-                    // вторая вкладка — прежний экран дорог телефона (14.10.2026).
-                    TabHeader(title = "Claude: траты", onBack = pop)
-                    WideCap { ClaudeSpendScreen(app) }
-                }
-                is Page.ModeSettings -> {
-                    TabHeader(
-                        title = p.group.title,
-                        glyph = p.group.glyph,
-                        onBack = pop,
-                        actions = { CostAction(openCost) },
-                    )
+                is Page.Group -> {
+                    TabHeader(title = p.group.title, glyph = p.group.glyph, onBack = pop)
                     WideCap {
                         ModeSettingsScreen(
                             app,
@@ -1274,70 +604,75 @@ private fun PageScreen(
                         )
                     }
                 }
-                // Вид v2 (этап 6, холст `Telefon.dc.html`): «Настройки телефона» из меню Ковчега и
-                // «Настройки» — один экран «Телефон»: группы строками, служебное бывшего «Ещё» — ниже.
-                is Page.Service -> if (ru.zf.pravka.ui.Look.v2 && (p.tab == Tab.MORE || p.tab == Tab.SETTINGS)) {
-                    // Без «‹»: «Телефон» — пункт меню Ковчега, как экраны режимов; назад — системным жестом.
-                    TabHeader(title = "Телефон", subtitle = phoneSubtitle(), actions = { CostAction(openCost) })
+                // «Телефон» — пункт меню Ковчега; назад — системным жестом или «‹».
+                Page.Phone -> {
+                    TabHeader(title = "Телефон", subtitle = phoneSubtitle(), onBack = pop)
                     PhoneSettingsScreen(
                         app,
                         serviceEnabled,
                         onOpenAccessibilitySettings,
                         onOpenGroup = openGroup,
-                        links = phoneLinks(app, openService, openMode),
+                        links = emptyList(),
                     )
-                } else {
-                    TabHeader(
-                        // Вид v2: «Ещё» открывается из меню Ковчега строкой «Настройки телефона» — так и называется.
-                        title = if (p.tab == Tab.MORE && ru.zf.pravka.ui.Look.v2) "Настройки телефона" else stringResource(p.tab.titleRes),
-                        glyph = if (p.tab == Tab.MORE) null else serviceGlyph(p.tab),
-                        onBack = pop,
-                        actions = {
-                            when (p.tab) {
-                                Tab.REPORT -> ExportAction(onLifeExport)
-                                Tab.STATS -> ExportAction { onDictationExport(true) }
-                                Tab.WHERE -> SettingsAction { whereSettings = true }
-                                else -> Unit
-                            }
-                            CostAction(openCost)
-                        },
-                    )
-                    when (p.tab) {
-                        Tab.MORE -> MoreList(
-                            app,
-                            onOpen = openService,
-                            onMode = openMode,
-                            onProfile = { openGroup(SettingsGroup.PROFILE) },
-                        )
-                        Tab.REPORT -> ReportTab(app)
-                        Tab.SETTINGS -> SettingsTab(app, serviceEnabled, onOpenAccessibilitySettings, onOpen = openGroup)
-                        Tab.DICTIONARY -> WideCap { DictionaryTab(dictionaryStore, historyLog, dictMiner) }
-                        Tab.PROMPTS -> WideCap { PromptsTab(promptStore) }
-                        Tab.LEARNING -> WideCap { LearningTab(app) }
-                        Tab.REVIEWS -> WideCap { ReviewsTab(app) }
-                        // Карта — во всю ширину и на разложенном Fold: ей тесно в колонке.
-                        Tab.WHERE -> WhereTab(
-                            app,
-                            serviceEnabled,
-                            settingsRequested = whereSettings,
-                            onSettingsHandled = { whereSettings = false },
-                            onOpenDela = { openGroup(SettingsGroup.DELA_SERVER) },
-                        )
-                        Tab.LOGS -> WideCap { LogsTab(app) }
-                        Tab.FEEDBACK -> WideCap { FeedbackTab(app) }
-                        Tab.STATS -> WideCap {
-                            DictationStatsTab(
-                                app,
-                                exportRequested = dictationExport,
-                                onExportHandled = { onDictationExport(false) },
-                            )
-                        }
-                        else -> Unit
-                    }
                 }
             }
         }
     }
+}
+
+/**
+ * Меню значка Ковчега (Правка 5.0, этап 7): разметка — запись Свода `ui.menu`, а если её нет или она кривая —
+ * заводское `Kovcheg.FACTORY`. С 22.10.2026 все пункты — страницы сервера внутри приложения ([onWeb],
+ * `ServiceWebScreen.kt`; настройкой — Custom Tab браузера), Claude — его приложение (нет — claude.ai).
+ */
+@Composable
+private fun KovchegMenuHost(
+    app: PravkaApp,
+    current: String?,
+    onPhone: () -> Unit,
+    onWeb: (ru.zf.pravka.core.ServicePage) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val nav by app.delaSync.services.collectAsState()
+    val link by app.delaSync.link.collectAsState()
+    val svod by app.svodStore.view.collectAsState()
+    val model = remember(nav, link, current, svod) {
+        val K = ru.zf.pravka.core.Kovcheg
+        val menu = K.menuFrom(ru.zf.pravka.core.Svod.value(K.MENU_KEY)) ?: K.FACTORY
+        val built = K.build(menu, emptyList(), nav, link?.url, webScreens = true)
+        ru.zf.pravka.ui.KovchegMenuModel(
+            big = built.big,
+            directions = built.directions,
+            create = built.create,
+            current = current,
+            news = false,
+        )
+    }
+    ru.zf.pravka.ui.KovchegMenu(
+        model = model,
+        onPick = { target ->
+            when (target) {
+                is ru.zf.pravka.core.Kovcheg.Target.Screen -> onDismiss()
+                is ru.zf.pravka.core.Kovcheg.Target.Web -> {
+                    // Страница сервиса — внутри приложения с шапкой Ковчега; название и значок — из пункта.
+                    val item = (model.big + (model.directions + listOfNotNull(model.create)).flatMap { it.items })
+                        .firstOrNull { it.target == target }
+                    onDismiss()
+                    onWeb(ru.zf.pravka.core.ServicePage(item?.name ?: target.url, item?.icon ?: "globe", target.url))
+                }
+                ru.zf.pravka.core.Kovcheg.Target.Claude -> { onDismiss(); openClaude(context) }
+            }
+        },
+        onPhone = onPhone,
+        onTheme = {
+            // Переключатель меню — между светлой и тёмной; «как в системе» — в настройках вида.
+            val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
+            ru.zf.pravka.ui.Look.theme = next
+            app.appScope.launch { app.settings.setLookTheme(next.key) }
+        },
+        onDismiss = onDismiss,
+    )
 }
 
 /**
@@ -1354,124 +689,6 @@ private fun WideCap(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Box(Modifier.fillMaxHeight().widthIn(max = 640.dp)) { content() }
     }
-}
-
-/** Экран режима в маршруте снимка «Что не так?» (`app:<экран>`, docs/dela-phone-24.md). */
-private fun screenKey(tab: Tab): String = when (tab) {
-    Tab.TODOIST -> ru.zf.pravka.core.ScreenDebug.DELA
-    else -> tab.name.lowercase()
-}
-
-/** Страница поверх экрана в маршруте снимка: «phone», «settings:dela», «cost», «reviews»… */
-private fun pageKey(p: Page): String = when (p) {
-    is Page.Cost -> "cost"
-    is Page.ModeSettings -> "settings:" + p.group.name.lowercase()
-    is Page.Service -> if (ru.zf.pravka.ui.Look.v2 && (p.tab == Tab.MORE || p.tab == Tab.SETTINGS)) "phone" else p.tab.name.lowercase()
-}
-
-/** Части «Тела» (`BodyTabs`: `BODY_SPORT`…`BODY_FOOD`) словами — в режим снимка. */
-private val BODY_PART_NAMES = listOf("Спорт", "Путь", "Журнал", "Еда")
-
-/**
- * Строка «Что не так?» для экрана (режим отладки, с 16.10.2026 на всех экранах — docs/dela-phone-24.md): шапка экрана
- * ставит её из `LocalScreenBar`; [at] — маршрут и режим экрана, null — строки нет (вкладка Дел рисует свою).
- */
-@Composable
-private fun DebugScreen(app: PravkaApp, at: ru.zf.pravka.core.ScreenDebug.At?, content: @Composable () -> Unit) {
-    val bar: (@Composable (String, String?) -> Unit)? = remember(at) {
-        at?.let { a -> @Composable { title: String, sub: String? -> ScreenDebugBar(app, a, title, sub) } }
-    }
-    androidx.compose.runtime.CompositionLocalProvider(ru.zf.pravka.ui.LocalScreenBar provides bar, content = content)
-}
-
-/** Ключ экрана в меню Ковчега — чтобы подсветить, где мы. */
-private fun kovchegKey(tab: Tab): String? = when (tab) {
-    Tab.TODAY -> ru.zf.pravka.core.Kovcheg.TODAY
-    Tab.ZASECHKA -> ru.zf.pravka.core.Kovcheg.ZASECHKA
-    Tab.PRAVKA -> ru.zf.pravka.core.Kovcheg.PRAVKA
-    Tab.SPORT -> ru.zf.pravka.core.Kovcheg.SPORT
-    Tab.FOOD -> ru.zf.pravka.core.Kovcheg.FOOD
-    Tab.TODOIST -> ru.zf.pravka.core.Kovcheg.DELA
-    Tab.MONEY -> ru.zf.pravka.core.Kovcheg.MONEY
-    else -> null
-}
-
-/** Экран приложения по ключу меню Ковчега. */
-private fun tabOfKovcheg(key: String): Tab? = when (key) {
-    ru.zf.pravka.core.Kovcheg.ZASECHKA -> Tab.ZASECHKA
-    ru.zf.pravka.core.Kovcheg.PRAVKA -> Tab.PRAVKA
-    ru.zf.pravka.core.Kovcheg.SPORT -> Tab.SPORT
-    ru.zf.pravka.core.Kovcheg.FOOD -> Tab.FOOD
-    ru.zf.pravka.core.Kovcheg.DELA -> Tab.TODOIST
-    ru.zf.pravka.core.Kovcheg.MONEY -> Tab.MONEY
-    else -> null
-}
-
-/**
- * Меню Ковчега с данными (план §3): большие кнопки и свои пункты — по
- * включённым режимам профиля, CRM — если Дела на своём сервере и она
- * открыта; сервисы, которых в приложении нет, — из `/api/me` сервера Дел
- * (`DelaSync.services`), адресов в коде нет. Что в меню и в каком порядке —
- * Свод `ui.menu` (этап 7, правит владелец в вебе Дел; синк Свода), нет записи
- * или она кривая — заводское `Kovcheg.FACTORY`. Веб — страница сервиса внутри
- * приложения ([onWeb], `ServiceWebScreen.kt`; настройкой — Custom Tab браузера),
- * Claude — его приложение (нет — claude.ai).
- */
-@Composable
-private fun KovchegMenuHost(
-    app: PravkaApp,
-    live: (Tab) -> Boolean,
-    current: String?,
-    news: Boolean,
-    onScreen: (String) -> Unit,
-    onPhone: () -> Unit,
-    onWeb: (ru.zf.pravka.core.ServicePage) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val context = LocalContext.current
-    val nav by app.delaSync.services.collectAsState()
-    val link by app.delaSync.link.collectAsState()
-    val onServer by app.delaServer.collectAsState()
-    val snap by app.delaStore.view.collectAsState()
-    val svod by app.svodStore.view.collectAsState()
-    val me = link?.user ?: app.delaStore.me
-    val crm = onServer && ru.zf.pravka.core.Dela.crmOn(snap, me)
-    val model = remember(nav, link, crm, current, news, live, svod) {
-        val K = ru.zf.pravka.core.Kovcheg
-        val menu = K.menuFrom(ru.zf.pravka.core.Svod.value(K.MENU_KEY)) ?: K.FACTORY
-        // Правка на диете (22.10.2026): своих экранов нет — меню целиком из страниц сервера.
-        val built = K.build(menu, emptyList(), nav, link?.url, zasechka = live(Tab.ZASECHKA), webScreens = true)
-        ru.zf.pravka.ui.KovchegMenuModel(
-            big = built.big,
-            directions = built.directions,
-            create = built.create,
-            current = current,
-            news = news,
-        )
-    }
-    ru.zf.pravka.ui.KovchegMenu(
-        model = model,
-        onPick = { target ->
-            when (target) {
-                is ru.zf.pravka.core.Kovcheg.Target.Screen -> onScreen(target.key)
-                is ru.zf.pravka.core.Kovcheg.Target.Web -> {
-                    // Страница сервиса — внутри приложения с шапкой Ковчега (`ServiceWebScreen.kt`); название и значок — из пункта.
-                    val item = (model.big + (model.directions + listOfNotNull(model.create)).flatMap { it.items }).firstOrNull { it.target == target }
-                    onDismiss()
-                    onWeb(ru.zf.pravka.core.ServicePage(item?.name ?: target.url, item?.icon ?: "globe", target.url))
-                }
-                ru.zf.pravka.core.Kovcheg.Target.Claude -> { onDismiss(); openClaude(context) }
-            }
-        },
-        onPhone = onPhone,
-        onTheme = {
-            // Переключатель меню — между светлой и тёмной; «как в системе» — в настройках вида.
-            val next = if (ru.zf.pravka.ui.Look.dark) ru.zf.pravka.ui.Look.Theme.LIGHT else ru.zf.pravka.ui.Look.Theme.DARK
-            ru.zf.pravka.ui.Look.theme = next
-            app.appScope.launch { app.settings.setLookTheme(next.key) }
-        },
-        onDismiss = onDismiss,
-    )
 }
 
 /**
@@ -1524,29 +741,6 @@ private fun NotificationsBanner(onFix: () -> Unit) {
 // Shared design pieces
 // ---------------------------------------------------------------------------
 
-/** The wide "П" mark - same as the launcher icon and the floating button. */
-@Composable
-internal fun BrandMark(size: androidx.compose.ui.unit.Dp, textSize: androidx.compose.ui.unit.TextUnit) {
-    Box(
-        modifier = Modifier
-            .size(size)
-            .background(MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            "П",
-            fontSize = textSize,
-            fontFamily = FontFamily.Serif,
-            fontWeight = FontWeight.Black,
-            color = MaterialTheme.colorScheme.onPrimary,
-        )
-    }
-}
-
-/** Прежнее имя подписи раздела — теперь та же [PaperLabel], чтобы подписи не расходились. */
-@Composable
-internal fun SectionLabel(text: String) = ru.zf.pravka.ui.PaperLabel(text)
-
 /**
  * Служебные экраны (Разборы, Обучение, Логи, Словарь, Промпты, Настройки)
  * до 24.09.2026 лежали на голой карточке Material — без фаски, света, зерна
@@ -1559,9 +753,6 @@ internal fun SectionCard(
     info: String? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) = ru.zf.pravka.ui.PaperCard(label = label, info = info, content = content)
-
-@Composable
-internal fun HintText(text: String) = ru.zf.pravka.ui.PaperHint(text)
 
 @Composable
 internal fun SpeechSection(
@@ -1717,1443 +908,4 @@ internal fun SpeechSection(
             )
         }
     }
-}
-
-@Composable
-internal fun RecordingsSection(recordings: ru.zf.pravka.data.Recordings, serviceEnabled: Boolean) {
-    val context = LocalContext.current
-    // listFiles() plus a length() stat per file - off the composition pass.
-    var items by remember { mutableStateOf<List<ru.zf.pravka.data.Recordings.Item>>(emptyList()) }
-    var busyId by remember { mutableStateOf<String?>(null) }
-    // NB: not named `ru` - that would shadow the `ru.zf.pravka` package.
-    val loc = remember { Locale.forLanguageTag("ru") }
-    var refreshTick by remember { mutableStateOf(0) }
-    LaunchedEffect(refreshTick) {
-        val found = withContext(Dispatchers.IO) { recordings.list() }
-        items = found
-    }
-    if (items.isEmpty()) return
-
-    SectionCard(label = stringResource(R.string.rec_header), info = stringResource(R.string.rec_hint)) {
-        for (item in items) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        stringResource(
-                            R.string.rec_item,
-                            java.text.SimpleDateFormat("dd.MM HH:mm", loc).format(java.util.Date(item.startedAt)),
-                            (item.durationMs / 1000),
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (busyId == item.id) {
-                        Text(stringResource(R.string.rec_transcribing), style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                // «Расшифровать» — главное действие записи, удаление — значком
-                // корзины цветом ошибки (24.09.2026): два слова рядом читались
-                // равными, а равными они не бывают.
-                PaperButton(
-                    stringResource(R.string.rec_transcribe),
-                    icon = Glyphs.Spark,
-                    primary = true,
-                    enabled = busyId == null,
-                    onClick = {
-                        val service = PravkaAccessibilityService.instance
-                        if (service == null || !serviceEnabled) {
-                            Feedback.toast(context, context.getString(R.string.rec_need_service))
-                        } else {
-                            busyId = item.id
-                            service.retryRecording(item.file) { ok: Boolean, msg: String ->
-                                busyId = null
-                                refreshTick++
-                                if (!ok) Feedback.toast(context, context.getString(R.string.rec_failed, msg))
-                            }
-                        }
-                    },
-                )
-                GlyphButton(
-                    Glyphs.Delete,
-                    stringResource(R.string.rec_delete),
-                    onClick = {
-                        recordings.delete(item.id)
-                        refreshTick++
-                    },
-                    tint = MaterialTheme.colorScheme.error,
-                )
-            }
-        }
-    }
-}
-
-// The learning tab: pending proposals (approve/reject, one by one or all at
-// once) and the approved rules with their confirmation counters. All actions
-// run on the APP scope - they must survive tab switches and screen closes.
-@Composable
-private fun LearningTab(app: PravkaApp) {
-    val ctx = LocalContext.current
-    var pending by remember { mutableStateOf<List<ru.zf.pravka.data.LearnStore.Suggestion>>(emptyList()) }
-    var rules by remember { mutableStateOf<List<ru.zf.pravka.data.RulesStore.Rule>>(emptyList()) }
-    var loadTick by remember { mutableStateOf(0) }
-    LaunchedEffect(loadTick) {
-        pending = app.learnStore.all()
-        rules = app.rulesStore.all()
-    }
-    fun refresh() { loadTick++ }
-
-    suspend fun accept(sug: ru.zf.pravka.data.LearnStore.Suggestion) {
-        if (sug.kind == "rule") {
-            app.rulesStore.add(sug.text, sug.exampleBefore, sug.exampleAfter)
-            app.learnLog.add("ПРИНЯТО правило: ${sug.text}")
-        } else {
-            app.dictionaryStore.add(
-                sug.from, sug.to,
-                when (sug.mode) {
-                    "PROTECT" -> DictMode.PROTECT
-                    "HINT" -> DictMode.HINT
-                    else -> DictMode.HARD
-                },
-                sug.note,
-            )
-            app.learnLog.add("ПРИНЯТО в словарь: ${sug.from} → ${sug.to} [${sug.mode}]")
-        }
-        app.learnStore.remove(sug.id)
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
-        // Автообучения больше нет (владелец, 15.09.2026: «он уже обучился
-        // достаточно, оставить только по кнопке»): ни слежки за полями, ни
-        // авторазбора по расписанию. Разбор — только отсюда и из меню «П».
-        SectionCard(
-            label = "Разбор по кнопке",
-            info = "Без модели в словарь уходит только ослышка, поправленная так же второй " +
-                "раз; остальные правки (смысл, форма слова, сложнее слова) — очередью для " +
-                "Опуса здесь и в ночном разборе. «Обучить» в меню «П» разбирает текст под " +
-                "курсором сразу. Находки — в словарь с пометкой «авто-обучение».",
-        ) {
-            var watch by remember { mutableStateOf<List<ru.zf.pravka.data.EditWatchStore.Entry>>(emptyList()) }
-            var watchTick by remember { mutableStateOf(0) }
-            var lastBatch by remember { mutableStateOf(0L) }
-            LaunchedEffect(watchTick, loadTick) {
-                watch = app.editWatch.all()
-                // Prefs read off the composition pass: recomposition is not
-                // the place for disk IO.
-                lastBatch = ctx.getSharedPreferences(
-                    PravkaAccessibilityService.PREFS_INTERNAL, android.content.Context.MODE_PRIVATE,
-                ).getLong(PravkaAccessibilityService.KEY_LAST_LEARN_BATCH, 0L)
-            }
-            val fmt = remember { java.text.SimpleDateFormat("dd.MM HH:mm", Locale.forLanguageTag("ru")) }
-            val edited = watch.count { it.editedTs > 0 }
-            Text(
-                "В наблюдении текстов: ${watch.size}, из них правленых: $edited." +
-                    (if (lastBatch > 0) "\nПоследний разбор: " + fmt.format(java.util.Date(lastBatch)) + "." else ""),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(Modifier.height(8.dp))
-            var analyzing by remember { mutableStateOf(false) }
-            LaunchedEffect(analyzing) {
-                if (analyzing) {
-                    // Give the forced batch a moment to start, then track it.
-                    kotlinx.coroutines.delay(1200)
-                    while (PravkaAccessibilityService.instance?.learnBatchRunning == true) {
-                        kotlinx.coroutines.delay(1000)
-                    }
-                    analyzing = false
-                    watchTick++
-                    loadTick++
-                }
-            }
-            if (analyzing) {
-                Text(
-                    "Идёт разбор (Опус)… результат появится в «Предложениях».",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(Modifier.height(6.dp))
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                GlyphButton(Glyphs.Refresh, "обновить", onClick = {
-                    watchTick++
-                    loadTick++
-                    Feedback.toast(ctx, "Обновлено")
-                })
-                Spacer(Modifier.weight(1f))
-                PaperButton(
-                    if (analyzing) "Разбираю…" else "Разобрать сейчас",
-                    icon = Glyphs.Spark,
-                    primary = true,
-                    enabled = !analyzing,
-                    onClick = {
-                        val svc = PravkaAccessibilityService.instance
-                        if (svc == null) {
-                            Feedback.toast(ctx, "Служба доступности выключена.")
-                        } else {
-                            svc.runLearnBatchNow()
-                            analyzing = true
-                        }
-                    },
-                )
-            }
-        }
-
-        // Три столбца владельца: надиктовано → модель → он. Журнал навсегда
-        // (data/CorrectionsLog.kt), выгрузка CSV — в статистике диктовки.
-        SectionCard(label = "Правки руками") {
-            var rows by remember { mutableStateOf<List<ru.zf.pravka.data.CorrectionsLog.Entry>>(emptyList()) }
-            LaunchedEffect(loadTick) { rows = app.corrections.all().takeLast(12).asReversed() }
-            val fmtC = remember { java.text.SimpleDateFormat("dd.MM HH:mm", Locale.forLanguageTag("ru")) }
-            if (rows.isEmpty()) {
-                HintText("Пока пусто: правь текст, который прислала Правка, — правка запишется сюда.")
-            } else {
-                HintText("Надиктовано → модель → ты; справа — что с этим сделано. Все строки — CSV в выгрузке статистики диктовки.")
-                for (r in rows) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        fmtC.format(java.util.Date(r.ts)) + " · " + r.pkg.substringAfterLast('.') + " · " +
-                            when {
-                                r.result.startsWith("dict:") -> "в словарь: " + r.result.substringAfter(':').substringAfter(':')
-                                r.result == "pending" -> "ждёт «Разобрать сейчас»" +
-                                    (if (r.pair.isNotEmpty()) " · " + r.pair else "")
-                                r.result.startsWith("same:") -> "уже в словаре"
-                                else -> r.result
-                            },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    // Три столбца значками, а не эмодзи (24.09.2026): микрофон —
-                    // надиктовано, искры — модель, карандаш — ты.
-                    MarkedLine(Glyphs.Mic, r.dictated.take(160), soft = true)
-                    MarkedLine(Glyphs.Spark, r.cleaned.take(160), soft = true)
-                    MarkedLine(Glyphs.Edit, r.edited.take(160), soft = false)
-                }
-            }
-        }
-
-        SectionCard(label = "Предложения (${pending.size})") {
-            if (pending.isEmpty()) {
-                HintText(
-                    "Пусто — и так и останется: разбор правок больше не придумывает " +
-                        "правил, а словарные находки («одно слово вместо другого») " +
-                        "уходят в словарь сами, с пометкой «авто-обучение»."
-                )
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    PaperTextButton("Отклонить все", color = MaterialTheme.colorScheme.error, onClick = {
-                        app.appScope.launch {
-                            for (sug in app.learnStore.all()) {
-                                app.learnLog.add("отклонено: ${if (sug.kind == "rule") sug.text else sug.from}")
-                                app.learnStore.remove(sug.id)
-                            }
-                            refresh()
-                            PravkaAccessibilityService.instance?.refreshLearnBadge()
-                        }
-                    })
-                    Spacer(Modifier.weight(1f))
-                    PaperButton("Принять все", icon = Glyphs.Check, primary = true, onClick = {
-                        app.appScope.launch {
-                            for (sug in app.learnStore.all()) accept(sug)
-                            refresh()
-                            PravkaAccessibilityService.instance?.refreshLearnBadge()
-                        }
-                    })
-                }
-                Spacer(Modifier.height(6.dp))
-                for (sug in pending) {
-                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text(
-                            when {
-                                sug.kind == "rule" -> "Правило: ${sug.text}"
-                                sug.mode == "PROTECT" -> "Защита: ${sug.from}"
-                                else -> "${sug.from} → ${sug.to}"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (sug.note.isNotBlank()) {
-                            Text(sug.note, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        if (sug.exampleBefore.isNotBlank() && sug.exampleAfter.isNotBlank()) {
-                            Text(
-                                "«${sug.exampleBefore}» → «${sug.exampleAfter}»",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        Row {
-                            PaperTextButton("Принять", icon = Glyphs.Check, onClick = {
-                                app.appScope.launch {
-                                    accept(sug)
-                                    refresh()
-                                    PravkaAccessibilityService.instance?.refreshLearnBadge()
-                                }
-                            })
-                            PaperTextButton("Отклонить", icon = Glyphs.Close, color = MaterialTheme.colorScheme.error, onClick = {
-                                app.appScope.launch {
-                                    app.learnLog.add("отклонено: ${if (sug.kind == "rule") sug.text else sug.from}")
-                                    app.learnStore.remove(sug.id)
-                                    refresh()
-                                    PravkaAccessibilityService.instance?.refreshLearnBadge()
-                                }
-                            })
-                        }
-                    }
-                }
-            }
-        }
-
-        SectionCard(
-            label = "Принятые правила (${rules.size})",
-            info = "Набор правится только руками: новых правил разбор не предлагает, " +
-                "сам себя набор не переписывает. «Оптимизировать» — Опус сливает дубли " +
-                "и противоречия, с предпросмотром. В запрос чистки правила уходят, если " +
-                "включён тумблер «Постоянные правила в промпте» в настройках Правки.",
-        ) {
-            if (rules.isEmpty()) {
-                HintText("Принятые правила появятся здесь.")
-            } else {
-                var optimizing by remember { mutableStateOf(false) }
-                var optimized by remember {
-                    mutableStateOf<ru.zf.pravka.provider.ClaudeProvider.OptimizedRules?>(null)
-                }
-                if (rules.size >= 2) {
-                    PaperButton(
-                        if (optimizing) "Оптимизирую (Опус)…" else "Оптимизировать набор",
-                        icon = Glyphs.Spark,
-                        enabled = !optimizing,
-                        onClick = {
-                            optimizing = true
-                            app.appScope.launch {
-                                val result = app.claudeProvider.optimizeRules(rules)
-                                optimizing = false
-                                result.onSuccess { opt ->
-                                    app.stats.recordAux(opt.costUsd, opt.tokensIn, opt.tokensOut, route = ru.zf.pravka.data.ModelRoute.PRAVKA_LEARN.key)
-                                    app.learnLog.add(
-                                        "оптимизация правил: ${rules.size} → ${opt.rules.size}, стоила $" +
-                                            "%.4f".format(java.util.Locale.US, opt.costUsd)
-                                    )
-                                    optimized = opt
-                                }.onFailure { e ->
-                                    Feedback.toast(ctx, e.message ?: "Не получилось оптимизировать")
-                                }
-                            }
-                        },
-                    )
-                    Spacer(Modifier.height(6.dp))
-                }
-                optimized?.let { opt ->
-                    PaperAlert(
-                        onDismiss = { optimized = null },
-                        title = "Оптимизированный набор",
-                        icon = Glyphs.Spark,
-                        subtitle = "${rules.size} → ${opt.rules.size} правил",
-                        dismiss = SheetAction("Отмена") { optimized = null },
-                        confirm = SheetAction("Заменить набор", icon = Glyphs.Check) {
-                            val chosen = opt.rules
-                            optimized = null
-                            app.appScope.launch {
-                                app.rulesStore.replaceAll(chosen.map { Triple(it.text, it.before, it.after) })
-                                app.learnLog.add("набор правил ЗАМЕНЁН оптимизированным (${chosen.size})")
-                                loadTick++
-                            }
-                        },
-                    ) {
-                        opt.rules.forEachIndexed { i, r ->
-                            Text("${i + 1}. ${r.text}", style = MaterialTheme.typography.bodyMedium)
-                            if (r.before.isNotBlank()) {
-                                Text(
-                                    "«${r.before}» → «${r.after}»",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-                // Что реально уезжает в промпт: потолок RulesStore.PROMPT_CAP по
-                // порядку. Владелец видел 54 одобренных правила и думал, что
-                // работают все; работали первые восемь (16.09.2026).
-                val fit = remember(rules) { ru.zf.pravka.data.RulesStore.fitsInPrompt(rules) }
-                rules.forEachIndexed { i, rule ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("${i + 1}. ${rule.text}", style = MaterialTheme.typography.bodyMedium)
-                            if (rule.enabled && !rule.pending && rule.id !in fit) {
-                                Text(
-                                    "в промпт не попадает: потолок ${ru.zf.pravka.data.RulesStore.PROMPT_CAP} знаков исчерпан правилами выше",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                            }
-                            if (rule.exampleBefore.isNotBlank() && rule.exampleAfter.isNotBlank()) {
-                                Text(
-                                    "«${rule.exampleBefore}» → «${rule.exampleAfter}»",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        Switch(
-                            checked = rule.enabled,
-                            onCheckedChange = { on ->
-                                app.appScope.launch { app.rulesStore.setEnabled(rule.id, on); refresh() }
-                            },
-                        )
-                        GlyphButton(
-                            Glyphs.Delete,
-                            "удалить правило",
-                            tint = MaterialTheme.colorScheme.error,
-                            onClick = {
-                                app.appScope.launch {
-                                    app.learnLog.add("правило удалено: ${rule.text}")
-                                    app.rulesStore.delete(rule.id)
-                                    refresh()
-                                }
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** Строка журнала правок со значком столбца: надиктовано, модель, ты. */
-@Composable
-private fun MarkedLine(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, soft: Boolean) {
-    val color = if (soft) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-    Row(verticalAlignment = Alignment.Top, modifier = Modifier.padding(top = 2.dp)) {
-        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.padding(top = 2.dp).size(14.dp))
-        Spacer(Modifier.width(6.dp))
-        Text(text, style = MaterialTheme.typography.bodySmall, color = color)
-    }
-}
-
-// The logs tab: the few logs that matter, each with copy and file export -
-// "нажал и показал" instead of hunting through screens.
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun LogsTab(app: PravkaApp) {
-    val context = LocalContext.current
-    var exportOpen by remember { mutableStateOf(false) }
-    var eventTail by remember { mutableStateOf<List<String>>(emptyList()) }
-    var learnTail by remember { mutableStateOf<List<String>>(emptyList()) }
-    var loadTick by remember { mutableStateOf(0) }
-    LaunchedEffect(loadTick) {
-        withContext(Dispatchers.IO) {
-            val e = app.eventLog.readLast(150)
-            val l = app.learnLog.readLast(150)
-            eventTail = e
-            learnTail = l
-        }
-    }
-
-    fun copy(text: String) {
-        val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        cm.setPrimaryClip(android.content.ClipData.newPlainText("Правка", text))
-        Feedback.toast(context, "Скопировано")
-    }
-
-    fun share(intent: android.content.Intent, title: String) {
-        runCatching {
-            context.startActivity(android.content.Intent.createChooser(intent, title))
-        }.onFailure { Feedback.toast(context, "Лог пуст") }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
-        // Выгрузки для разбора — наверху, одной кнопкой каждая (владелец,
-        // 16.09.2026: искал расшифровки в «Логах», а они жили за значком
-        // выгрузки в «Статистике диктовки», куда из «Ещё» хода нет). Каждая
-        // кнопка отдаёт файл целиком; иной период — тем же диалогом, что там.
-        SectionCard(
-            label = "Выгрузить для разбора",
-            info = "Файл целиком в шаринг — Drive, почта, чат. Расшифровки — сырой выход " +
-                "распознавателя; история — надиктовано и правка модели; правки руками — " +
-                "надиктовано · модель · ты; словарь и правила — то, что уходит в промпт. " +
-                "Иной период — «За период…».",
-        ) {
-            FlowRow(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                LogExport(onClick = {
-                    share(app.transcriptionLog.shareJsonIntent(), "Расшифровки")
-                }, label = "Расшифровки (JSON)")
-                LogExport(onClick = {
-                    share(app.historyLog.shareIntent(), "История правок")
-                }, label = "История правок (JSONL)")
-                LogExport(onClick = {
-                    // shareCsvIntent — suspend: собирается в области приложения.
-                    app.appScope.launch {
-                        val intent = runCatching { app.corrections.shareCsvIntent() }.getOrNull()
-                        if (intent == null) Feedback.toast(context, "Не собралась")
-                        else share(intent, "Правки руками")
-                    }
-                }, label = "Правки руками (CSV)")
-                LogExport(onClick = {
-                    share(app.transcriptionLog.shareMetricsCsvIntent(), "Метрики диктовки")
-                }, label = "Метрики (CSV)")
-                // Сколько шёл каждый запрос к Claude и сколько обещала кнопка —
-                // то, по чему прогноз секунд проверяется снаружи (26.09.2026).
-                LogExport(onClick = {
-                    // Журнал замеров — мегабайты строк: собирается не на главном потоке.
-                    app.appScope.launch {
-                        val intent = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            runCatching { app.paceStore.shareCsvIntent() }.getOrNull()
-                        }
-                        if (intent == null) Feedback.toast(context, "Не собралась")
-                        else share(intent, "Замеры Claude")
-                    }
-                }, label = "Замеры Claude (CSV)")
-                LogExport(onClick = {
-                    // exportJson — suspend: собирается в области приложения, файл во
-                    // временной папке, как у выгрузки во вкладке «Словарь».
-                    app.appScope.launch {
-                        val intent = runCatching {
-                            val f = File(context.cacheDir, "pravka_dictionary.json")
-                            f.writeText(app.dictionaryStore.exportJson())
-                            ru.zf.pravka.data.shareFileIntent(context, f, "application/json")
-                        }.getOrNull()
-                        if (intent == null) Feedback.toast(context, "Не собрался") else share(intent, "Словарь")
-                    }
-                }, label = "Словарь (JSON)")
-                LogExport(onClick = { share(app.rulesStore.shareIntent(), "Правила") }, label = "Правила (JSON)")
-                PaperButton("За период…", icon = Glyphs.Calendar, onClick = { exportOpen = true })
-            }
-        }
-        if (exportOpen) DictationExportDialog(app, onDismiss = { exportOpen = false })
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Spacer(Modifier.weight(1f))
-            PaperTextButton("Обновить логи", icon = Glyphs.Refresh, onClick = { loadTick++ })
-        }
-
-        SectionCard(
-            label = "Эвал промпта",
-            info = "Золотой набор: вход диктовки и эталонный результат. Каждое " +
-                "изменение промпта прогоняется по набору и меряется цифрой. " +
-                "Запросы той же формы, что дневная чистка, по одному — минута-две.",
-        ) {
-            var items by remember { mutableStateOf<List<ru.zf.pravka.data.EvalStore.Item>>(emptyList()) }
-            var evalTick by remember { mutableStateOf(0) }
-            var showSet by remember { mutableStateOf(false) }
-            var running by remember { mutableStateOf(ru.zf.pravka.core.EvalRunner.running) }
-            var progress by remember { mutableStateOf(0 to 0) }
-            var evalStage by remember { mutableStateOf("") }
-            var last by remember { mutableStateOf<org.json.JSONObject?>(null) }
-            LaunchedEffect(evalTick) {
-                items = app.evalStore.all()
-                // File read off the composition pass.
-                last = withContext(Dispatchers.IO) { app.evalStore.lastRun() }
-            }
-            LaunchedEffect(running) {
-                while (ru.zf.pravka.core.EvalRunner.running) {
-                    progress = ru.zf.pravka.core.EvalRunner.done to ru.zf.pravka.core.EvalRunner.total
-                    evalStage = ru.zf.pravka.core.EvalRunner.stage
-                    kotlinx.coroutines.delay(1500)
-                }
-                running = false
-                evalTick++
-            }
-            Text("Эталонов: ${items.size}", style = MaterialTheme.typography.bodyMedium)
-            last?.let { run ->
-                Text(
-                    "Последний прогон: средний ${"%.1f".format(run.optDouble("avg") * 100)}%, " +
-                        "точных ${run.optInt("exact")} из ${run.optInt("total")}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            if (running) {
-                Text(
-                    "Идёт прогон: ${progress.first}/${progress.second}" + (if (evalStage.isNotBlank()) " · $evalStage" else "") + "…",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                PaperButton("Из истории", icon = Glyphs.Download, onClick = {
-                    app.appScope.launch {
-                        val added = app.evalStore.addAll(
-                            withContext(Dispatchers.IO) { app.historyLog.readPairs(40) }
-                        )
-                        Feedback.toast(context, "Добавлено эталонов: $added")
-                        evalTick++
-                    }
-                })
-                Spacer(Modifier.weight(1f))
-                PaperButton(
-                    if (running) "Идёт…" else "Прогнать",
-                    icon = Glyphs.Play,
-                    primary = true,
-                    enabled = !running && items.isNotEmpty(),
-                    onClick = {
-                        ru.zf.pravka.core.EvalRunner.start(app)
-                        running = true
-                    },
-                )
-            }
-            PaperTextButton(
-                if (showSet) "Скрыть набор" else "Показать набор",
-                icon = if (showSet) Glyphs.ChevronUp else Glyphs.ChevronDown,
-                onClick = { showSet = !showSet },
-            )
-            if (showSet) {
-                for (item in items) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    ) {
-                        Text(
-                            item.input.take(80),
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.weight(1f),
-                        )
-                        GlyphButton(
-                            Glyphs.Delete,
-                            "убрать эталон",
-                            tint = MaterialTheme.colorScheme.error,
-                            onClick = { app.appScope.launch { app.evalStore.remove(item.id); evalTick++ } },
-                        )
-                    }
-                }
-            }
-        }
-
-        SectionCard(label = "Распознавание и вставка") {
-            HintText("Сессии распознавания, сегменты, ошибки, путь вставки.")
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (eventTail.isEmpty()) "Пусто." else eventTail.joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-            )
-            Row {
-                PaperTextButton("Копировать", icon = Glyphs.Copy, onClick = { copy(eventTail.joinToString("\n")) })
-                PaperTextButton("Файлом", icon = Glyphs.Share, onClick = { share(app.eventLog.shareIntent(), "Журнал событий") })
-            }
-        }
-
-        SectionCard(label = "Обучение") {
-            HintText("Снимки правок, батчи, предложения, решения, подтверждения правил.")
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (learnTail.isEmpty()) "Пусто." else learnTail.joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-            )
-            Row {
-                PaperTextButton("Копировать", icon = Glyphs.Copy, onClick = { copy(learnTail.joinToString("\n")) })
-                PaperTextButton("Файлом", icon = Glyphs.Share, onClick = { share(app.learnLog.shareIntent(), "Журнал обучения") })
-            }
-        }
-
-        SectionCard(label = "Запросы к Claude (отладка)") {
-            val debugOn by app.settings.debugLogFlow.collectAsState(initial = false)
-            var reqTail by remember { mutableStateOf<List<String>>(emptyList()) }
-            var reqTick by remember { mutableStateOf(0) }
-            LaunchedEffect(reqTick, loadTick) {
-                reqTail = withContext(Dispatchers.IO) { app.requestLog.readLast(60) }
-            }
-            HintText(
-                if (debugOn) "Режим отладки включён: сюда пишется каждый запрос целиком."
-                else "Режим отладки выключен (Настройки → Обновления и служба → Отладка). Ниже — что успело записаться."
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (reqTail.isEmpty()) "Пусто." else reqTail.joinToString("\n"),
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = FontFamily.Monospace,
-                maxLines = 40,
-            )
-            Row {
-                PaperTextButton("Файлом", icon = Glyphs.Share, onClick = { share(app.requestLog.shareIntent(), "Запросы к Claude") })
-                PaperTextButton("Очистить", icon = Glyphs.Delete, color = MaterialTheme.colorScheme.error, onClick = {
-                    app.requestLog.clear()
-                    reqTick++
-                    Feedback.toast(context, "Лог запросов очищен")
-                })
-            }
-        }
-    }
-}
-
-/** Кнопка выгрузки файла из «Логов»: одна форма на все семь. */
-@Composable
-private fun LogExport(onClick: () -> Unit, label: String) {
-    PaperButton(label, icon = Glyphs.Export, onClick = onClick)
-}
-
-@Composable
-private fun dictModeColor(mode: DictMode) = when (mode) {
-    DictMode.HARD -> MaterialTheme.colorScheme.primary
-    DictMode.HINT -> MaterialTheme.colorScheme.tertiary
-    DictMode.PROTECT -> MaterialTheme.colorScheme.secondary
-}
-
-@Composable
-private fun DictionaryTab(
-    store: DictionaryStore,
-    historyLog: HistoryLog,
-    dictMiner: ru.zf.pravka.provider.DictMiner,
-) {
-    val context = LocalContext.current
-    // App-lifetime scope for persistence: rememberCoroutineScope dies with
-    // the composition and cancels DataStore/file writes mid-flight when the
-    // owner switches tabs (the "принял четыре правила, записалось одно" bug
-    // class - fixed in Learning, but these older tabs kept the old scope).
-    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
-    val entries by store.entriesFlow.collectAsState()
-    var search by remember { mutableStateOf("") }
-    var dialogEntry by remember { mutableStateOf<DictEntry?>(null) }
-    var showAddDialog by remember { mutableStateOf(false) }
-    var mining by remember { mutableStateOf(false) }
-    var suggestions by remember { mutableStateOf<List<ru.zf.pravka.provider.DictMiner.Suggestion>?>(null) }
-    var picked by remember { mutableStateOf<Set<Int>>(emptySet()) }
-    // Разделы свёрнуты, пока не тапнули по заголовку (владелец, 15.09.2026:
-    // «иначе приходится крутить очень долго»); поиск раскрывает все.
-    var opened by remember { mutableStateOf<Set<DictMode>>(emptySet()) }
-
-    LaunchedEffect(Unit) { store.all() }  // triggers initial load
-
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val added = runCatching {
-                    val text = context.contentResolver.openInputStream(uri)!!
-                        .bufferedReader().use { it.readText() }
-                    store.importJson(text)
-                }.getOrElse { -1 }
-                Feedback.toast(
-                    context,
-                    if (added >= 0) context.getString(R.string.dict_imported, added)
-                    else context.getString(R.string.dict_import_failed),
-                )
-            }
-        }
-    }
-
-    fun export() {
-        scope.launch {
-            val json = store.exportJson()
-            val file = File(context.cacheDir, "pravka_dictionary.json")
-            file.writeText(json)
-            val uri = androidx.core.content.FileProvider.getUriForFile(context, "ru.zf.pravka.files", file)
-            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                type = "application/json"
-                putExtra(android.content.Intent.EXTRA_STREAM, uri)
-                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            context.startActivity(android.content.Intent.createChooser(intent, context.getString(R.string.dict_export)))
-        }
-    }
-
-    val query = search.trim().lowercase()
-    fun section(mode: DictMode) = entries
-        .filter { it.mode == mode }
-        .filter { query.isEmpty() || it.from.lowercase().contains(query) || it.to.lowercase().contains(query) }
-        .sortedByDescending { it.hits }
-
-    val listState = rememberLazyListState()
-    LazyColumn(
-        modifier = Modifier.fillMaxSize().scrollFade(listState),
-        state = listState,
-        contentPadding = ScreenPad.Padding,
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        item {
-            // Поиск и действия одной плашкой (24.09.2026): три слова-кнопки
-            // над полем читались строкой текста, а не кнопками.
-            ru.zf.pravka.ui.PaperCard {
-                PaperField(
-                    value = search,
-                    onValueChange = { search = it },
-                    label = stringResource(R.string.dict_search),
-                    trailing = { Icon(Glyphs.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    GlyphButton(Glyphs.Upload, stringResource(R.string.dict_export), onClick = { export() })
-                    GlyphButton(Glyphs.Download, stringResource(R.string.dict_import), onClick = {
-                        importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                    })
-                    PaperTextButton(
-                        stringResource(if (mining) R.string.dict_mine_running else R.string.dict_mine),
-                        icon = Glyphs.Spark,
-                        enabled = !mining,
-                        onClick = {
-                        mining = true
-                        scope.launch {
-                            val pairs = withContext(Dispatchers.IO) { historyLog.readPairs(100) }
-                            val result = dictMiner.mine(pairs)
-                            mining = false
-                            result.onSuccess { found ->
-                                if (found.isEmpty()) {
-                                    Feedback.toast(context, context.getString(R.string.dict_mine_empty))
-                                } else {
-                                    // Skip what the dictionary already has.
-                                    val known = store.all().map { it.from.lowercase() }.toHashSet()
-                                    val fresh = found.filter { it.from.lowercase() !in known }
-                                    if (fresh.isEmpty()) {
-                                        Feedback.toast(context, context.getString(R.string.dict_mine_empty))
-                                    } else {
-                                        suggestions = fresh
-                                        picked = fresh.indices.toSet()
-                                    }
-                                }
-                            }.onFailure {
-                                Feedback.toast(context, context.getString(R.string.dict_mine_failed, it.message ?: ""))
-                            }
-                        }
-                        },
-                    )
-                    Spacer(Modifier.weight(1f))
-                    PaperButton(stringResource(R.string.dict_add), icon = Glyphs.Plus, primary = true, onClick = { showAddDialog = true })
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-        }
-
-        for (mode in DictMode.entries) {
-            val sectionEntries = section(mode)
-            val expanded = query.isNotEmpty() || mode in opened
-            item(key = "header_$mode") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { opened = if (mode in opened) opened - mode else opened + mode }
-                        .padding(top = 14.dp, bottom = 6.dp, start = 4.dp),
-                ) {
-                    Box(
-                        Modifier
-                            .size(8.dp)
-                            .background(dictModeColor(mode), CircleShape)
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(
-                            when (mode) {
-                                DictMode.HARD -> R.string.dict_section_hard
-                                DictMode.HINT -> R.string.dict_section_hint
-                                DictMode.PROTECT -> R.string.dict_section_protect
-                            },
-                            sectionEntries.size,
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Icon(
-                        Glyphs.ChevronDown,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp).rotate(if (expanded) 180f else 0f),
-                    )
-                }
-            }
-            if (expanded) items(sectionEntries, key = { it.id }) { entry ->
-                DictRow(entry, onClick = { dialogEntry = entry }, onToggle = { enabled ->
-                    scope.launch { store.update(entry.copy(enabled = enabled)) }
-                })
-            }
-        }
-    }
-
-    suggestions?.let { list ->
-        PaperAlert(
-            onDismiss = { suggestions = null },
-            title = stringResource(R.string.dict_mine_title),
-            icon = Glyphs.Spark,
-            subtitle = "отмечено ${picked.size} из ${list.size}",
-            dismiss = SheetAction(stringResource(R.string.dict_cancel)) { suggestions = null },
-            confirm = SheetAction(stringResource(R.string.dict_mine_add), icon = Glyphs.Plus) {
-                val chosen = list.filterIndexed { i, _ -> i in picked }
-                suggestions = null
-                scope.launch {
-                    for (sug in chosen) store.add(sug.from, sug.to, sug.mode, sug.note)
-                    Feedback.toast(context, context.getString(R.string.dict_mine_added, chosen.size))
-                }
-            },
-        ) {
-            list.forEachIndexed { i, sug ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                ) {
-                    Checkbox(
-                        checked = i in picked,
-                        onCheckedChange = { on ->
-                            picked = if (on) picked + i else picked - i
-                        },
-                    )
-                    Column {
-                        Text(
-                            if (sug.mode == DictMode.PROTECT) "\u0417\u0430\u0449\u0438\u0442\u0430: ${sug.from}"
-                            else "${sug.from} \u2192 ${sug.to}",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                        if (sug.note.isNotBlank()) {
-                            Text(
-                                sug.note,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showAddDialog) {
-        DictEntryDialog(
-            entry = null,
-            onDismiss = { showAddDialog = false },
-            onSave = { from, to, mode, note, _ ->
-                scope.launch { store.add(from, to, mode, note) }
-                showAddDialog = false
-            },
-            onDelete = null,
-        )
-    }
-    dialogEntry?.let { entry ->
-        DictEntryDialog(
-            entry = entry,
-            onDismiss = { dialogEntry = null },
-            onSave = { from, to, mode, note, enabled ->
-                scope.launch { store.update(entry.copy(from = from, to = to, mode = mode, note = note, enabled = enabled)) }
-                dialogEntry = null
-            },
-            onDelete = {
-                scope.launch { store.delete(entry.id) }
-                dialogEntry = null
-            },
-        )
-    }
-}
-
-@Composable
-private fun DictRow(entry: DictEntry, onClick: () -> Unit, onToggle: (Boolean) -> Unit) {
-    // Строка словаря — на материале плашки, а не голой карточкой Material
-    // (24.09.2026): фаска и тон те же, что у всех плашек.
-    val look = ru.zf.pravka.ui.LocalCardLook.current
-    val shape = MaterialTheme.shapes.medium
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().then(if (look.bevel) Modifier.bevel(shape) else Modifier),
-        colors = CardDefaults.cardColors(
-            containerColor = ru.zf.pravka.ui.darkened(MaterialTheme.colorScheme.surfaceContainerLow, look.darken),
-        ),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (entry.to.isNotBlank()) "${entry.from} → ${entry.to}" else entry.from,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (entry.note.isNotBlank()) {
-                    Text(
-                        entry.note,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            if (entry.hits > 0) {
-                Text(
-                    "×${entry.hits}",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.tertiary,
-                )
-            }
-            Switch(checked = entry.enabled, onCheckedChange = onToggle, modifier = Modifier.padding(start = 8.dp))
-        }
-    }
-}
-
-@Composable
-internal fun DictEntryDialog(
-    entry: DictEntry?,
-    onDismiss: () -> Unit,
-    onSave: (from: String, to: String, mode: DictMode, note: String, enabled: Boolean) -> Unit,
-    onDelete: (() -> Unit)?,
-) {
-    var from by remember { mutableStateOf(entry?.from ?: "") }
-    var to by remember { mutableStateOf(entry?.to ?: "") }
-    var mode by remember { mutableStateOf(entry?.mode ?: DictMode.HARD) }
-    var note by remember { mutableStateOf(entry?.note ?: "") }
-    var enabled by remember { mutableStateOf(entry?.enabled ?: true) }
-
-    PaperAlert(
-        onDismiss = onDismiss,
-        title = stringResource(if (entry == null) R.string.dict_add else R.string.dict_edit),
-        icon = Glyphs.Dictionary,
-        subtitle = entry?.let { if (it.hits > 0) "сработало ×${it.hits}" else null },
-        destructive = onDelete?.let { SheetAction(stringResource(R.string.dict_delete), onClick = it) },
-        confirm = SheetAction(stringResource(R.string.settings_save), icon = Glyphs.Check, enabled = from.isNotBlank()) {
-            if (from.isNotBlank()) onSave(from, to, mode, note, enabled)
-        },
-    ) {
-        PaperField(
-            value = from,
-            onValueChange = { from = it },
-            label = stringResource(R.string.dict_from),
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-        )
-        if (mode != DictMode.PROTECT) {
-            PaperField(
-                value = to,
-                onValueChange = { to = it },
-                label = stringResource(R.string.dict_to),
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
-            )
-        }
-        ChipRow {
-            for (m in DictMode.entries) {
-                PaperChip(
-                    stringResource(
-                        when (m) {
-                            DictMode.HARD -> R.string.dict_mode_hard
-                            DictMode.HINT -> R.string.dict_mode_hint
-                            DictMode.PROTECT -> R.string.dict_mode_protect
-                        }
-                    ),
-                    selected = mode == m,
-                    onClick = { mode = m },
-                )
-            }
-        }
-        if (mode == DictMode.HINT) {
-            PaperField(
-                value = note,
-                onValueChange = { note = it },
-                label = stringResource(R.string.dict_note),
-                singleLine = false,
-            )
-        }
-        if (entry != null) {
-            PaperToggle(stringResource(R.string.dict_enabled), enabled, { enabled = it })
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Prompts
-// ---------------------------------------------------------------------------
-
-private val promptTitles = mapOf(
-    PromptStore.PromptId.CLEAN_CLAUDE to R.string.prompt_title_clean_claude,
-    PromptStore.PromptId.BUSINESS to R.string.prompt_title_business,
-    PromptStore.PromptId.SOFTEN to R.string.prompt_title_soften,
-    PromptStore.PromptId.PROSE to R.string.prompt_title_prose,
-    PromptStore.PromptId.MEETING to R.string.prompt_title_meeting,
-    PromptStore.PromptId.TASKS to R.string.prompt_title_tasks,
-    PromptStore.PromptId.TASKS_DELA to R.string.prompt_title_tasks_dela,
-    PromptStore.PromptId.ZASECHKA_FORK to R.string.prompt_title_zasechka_fork,
-    PromptStore.PromptId.SAY_FORK to R.string.prompt_title_say_fork,
-    PromptStore.PromptId.ZASECHKA_PHONE to R.string.prompt_title_zasechka_phone,
-    PromptStore.PromptId.FOOD to R.string.prompt_title_food,
-    PromptStore.PromptId.MONEY to R.string.prompt_title_money,
-    PromptStore.PromptId.MONEY_MATCH to R.string.prompt_title_money_match,
-    PromptStore.PromptId.MONEY_ASK to R.string.prompt_title_money_ask,
-    PromptStore.PromptId.MONEY_PATTERNS to R.string.prompt_title_money_patterns,
-    PromptStore.PromptId.MONEY_ANSWER to R.string.prompt_title_money_answer,
-    PromptStore.PromptId.COACH to R.string.prompt_title_coach,
-    PromptStore.PromptId.TRAINER to R.string.prompt_title_trainer,
-    PromptStore.PromptId.BODY to R.string.prompt_title_body,
-)
-
-@Composable
-private fun PromptsTab(promptStore: PromptStore) {
-    var editing by remember { mutableStateOf<PromptStore.PromptId?>(null) }
-    val current = editing
-    if (current == null) {
-        PromptList(promptStore, onOpen = { editing = it })
-    } else {
-        PromptEditor(promptStore, current, onBack = { editing = null })
-    }
-}
-
-/**
- * Набор промптов: отдать свои тексты другой установке и принять чужие
- * (владелец, 25.09.2026: Марианне «промпты надо дать мои»). Свои правки и
- * принятые недельной правкой версии живут только в базе владельца — без
- * набора у неё были бы заводские из APK. Род и «без прозы» у получателя
- * накладываются при сборке запроса, текст набора не трогается.
- */
-@Composable
-private fun PromptSetCard(promptStore: PromptStore) {
-    val context = LocalContext.current
-    val app = context.applicationContext as PravkaApp
-    val scope = app.appScope
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
-            val result = runCatching {
-                val text = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readText() }
-                }
-                val (from, texts) = ru.zf.pravka.data.PromptSet.decode(text)
-                val n = promptStore.importSet(texts)
-                app.eventLog.add("промпты: принят набор от ${from.ifBlank { "?" }} — $n")
-                if (n == 0) "В наборе нет своих текстов — у отправителя заводские, как и здесь"
-                else "Принято промптов: $n" + (if (from.isNotBlank()) " (от $from)" else "")
-            }.getOrElse { e -> "Набор не принят: ${e.message ?: e.javaClass.simpleName}" }
-            Feedback.toast(context, result)
-        }
-    }
-    SectionCard(
-        label = "Набор промптов",
-        info = "«Поделиться» собирает в один файл все промпты, которые здесь правили руками " +
-            "или приняла недельная правка, — отправь его на другой телефон. «Принять» кладёт " +
-            "такие тексты поверх здешних. Заводские промпты у всех одинаковые, в набор они не " +
-            "едут. У другого пользователя чистка сама пишет в его роде, а художественной " +
-            "прозы у него нет — это накладывается при запросе, не в тексте.",
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PaperButton("Поделиться набором", icon = Glyphs.Share, onClick = {
-                scope.launch {
-                    runCatching {
-                        val texts = promptStore.overrides().mapKeys { it.key.storageKey }
-                        if (texts.isEmpty()) {
-                            Feedback.toast(context, "Своих текстов нет — все промпты заводские")
-                            return@launch
-                        }
-                        val from = app.profileStore.current?.name.orEmpty()
-                        val file = withContext(Dispatchers.IO) {
-                            File(context.cacheDir, "pravka-prompts.json").also {
-                                it.writeText(ru.zf.pravka.data.PromptSet.encode(from, texts, System.currentTimeMillis()))
-                            }
-                        }
-                        context.startActivity(
-                            android.content.Intent.createChooser(
-                                ru.zf.pravka.data.shareFileIntent(context, file, "application/json"),
-                                "Набор промптов",
-                            )
-                        )
-                    }.onFailure { e -> Feedback.toast(context, "Набор не собрался: ${e.message}") }
-                }
-            })
-            PaperButton("Принять набор", icon = Glyphs.Download, onClick = {
-                importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-            })
-        }
-    }
-}
-
-@Composable
-private fun PromptList(promptStore: PromptStore, onOpen: (PromptStore.PromptId) -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-        verticalArrangement = Arrangement.spacedBy(ScreenPad.Gap),
-    ) {
-        PromptSetCard(promptStore)
-        // Business-season workflow: Whisper transcribes meetings on the
-        // owner's computer; this assembles the MEETING prompt + the FULL
-        // current dictionary + the approved rules into one clipboard-ready
-        // request for a Claude chat. Nothing is sent from the app.
-        SectionCard(
-            label = "Для встреч",
-            info = "Собирает полный запрос для чистки расшифровки встречи — промпт " +
-                "«Встреча» + весь текущий словарь + принятые правила — и кладёт " +
-                "в буфер. Вставь его в чат с Клодом и добавь расшифровку.",
-        ) {
-            val ctx = LocalContext.current
-            val app = ctx.applicationContext as PravkaApp
-            PaperHint("Промпт «Встреча», словарь и правила — одним запросом в буфер.")
-            Spacer(Modifier.height(8.dp))
-            PaperButton("Скопировать промпт для встречи", icon = Glyphs.Copy, primary = true, onClick = {
-                app.appScope.launch {
-                    val template = promptStore.effective(PromptStore.PromptId.MEETING)
-                    val entries = app.dictionaryStore.all().filter { it.enabled }
-                    val dictListing = if (entries.isEmpty()) "—" else buildString {
-                        for (e in entries) {
-                            when (e.mode) {
-                                DictMode.HARD -> append("«").append(e.from).append("» → «").append(e.to).append("»")
-                                DictMode.HINT -> {
-                                    append("«").append(e.from).append("» → «").append(e.to).append("»")
-                                    if (e.note.isNotBlank()) append(" (").append(e.note).append(")")
-                                }
-                                DictMode.PROTECT -> append("«").append(e.from)
-                                    .append("» — правильное написание, не менять")
-                            }
-                            append('\n')
-                        }
-                    }.trim()
-                    val rulesBlock = app.rulesStore.enabledBlock()
-                    val full = buildString {
-                        append(template.replace(Prompts.PLACEHOLDER_DICT, dictListing))
-                        if (rulesBlock.isNotBlank()) append("\n\n").append(rulesBlock)
-                        append("\n\n=== РАСШИФРОВКА ВСТРЕЧИ (вставь ниже) ===\n")
-                    }
-                    ru.zf.pravka.target.ClipboardTarget(ctx).write(full)
-                    Feedback.toast(ctx, "Скопировано: ${full.length} зн., словарь: ${entries.size}. Вставь в чат с Клодом.")
-                }
-            })
-        }
-
-        // Промпт ночного поиска паттернов не показываем: поиск снят (15.09.2026),
-        // а сам текст остался в заводских на случай сохранённой правки.
-        // Список — одной плашкой строк (24.09.2026), а не восемнадцать голых
-        // карточек: так он читается оглавлением.
-        ru.zf.pravka.ui.PaperCard(label = "промпты") {
-            val ids = PromptStore.PromptId.entries.filter { it != PromptStore.PromptId.PATTERNS }
-            ids.forEachIndexed { i, id ->
-                if (i > 0) RowRule()
-                val override by promptStore.overrideFlow(id).collectAsState(initial = null)
-                val effective = override ?: promptStore.factory(id)
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable { onOpen(id) }
-                        .padding(vertical = 10.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            // getValue кидал NoSuchElement на промпте, для
-                            // которого забыли заголовок, — и весь экран падал.
-                            // Новый промпт не должен ронять Промпты: покажем
-                            // его ключом, это уродливо и видно, что чинить.
-                            promptTitles[id]?.let { stringResource(it) } ?: id.storageKey,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (override != null) {
-                            Text(
-                                stringResource(R.string.prompt_modified),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), MaterialTheme.shapes.small)
-                                    .padding(horizontal = 8.dp, vertical = 3.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                        }
-                        Icon(Glyphs.Forward, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        effective.lineSequence().take(2).joinToString("\n"),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                    )
-                    Text(
-                        stringResource(R.string.prompt_char_count, effective.length, effective.length / 3),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PromptEditor(
-    promptStore: PromptStore,
-    id: PromptStore.PromptId,
-    onBack: () -> Unit,
-) {
-    // App-lifetime scope for persistence: rememberCoroutineScope dies with
-    // the composition and cancels DataStore/file writes mid-flight when the
-    // owner switches tabs (the "принял четыре правила, записалось одно" bug
-    // class - fixed in Learning, but these older tabs kept the old scope).
-    val scope = (LocalContext.current.applicationContext as PravkaApp).appScope
-    var text by remember { mutableStateOf("") }
-    var loaded by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<Int?>(null) }
-    var warning by remember { mutableStateOf<Int?>(null) }
-    var confirmReset by remember { mutableStateOf(false) }
-    var savedMark by remember { mutableStateOf(false) }
-    // Правка руками у общего с сервером промпта (06.10.2026): своя копия здесь —
-    // это уже не общий текст, и владелец должен это видеть словами.
-    val own by promptStore.overrideFlow(id).collectAsState(initial = null)
-    // Свод (06.10.2026): правда о промптах на сервере — правка отсюда уходит туда, для всех.
-    val app = LocalContext.current.applicationContext as PravkaApp
-    val svodView by app.svodStore.view.collectAsState()
-    val svodOn = remember(svodView) { promptStore.svodOn() }
-
-    LaunchedEffect(id) {
-        text = promptStore.raw(id)
-        loaded = true
-    }
-
-    // Системное «назад» возвращает к списку промптов, а не закрывает экран:
-    // вторая кнопка «← Назад» под шапкой с «‹» снята (24.09.2026).
-    BackHandler(onBack = onBack)
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .fadingScroll()
-            .padding(ScreenPad.Padding),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            GlyphButton(Glyphs.Back, stringResource(R.string.prompt_back), onClick = onBack, tint = MaterialTheme.colorScheme.primary)
-            Text(
-                promptTitles[id]?.let { stringResource(it) } ?: id.storageKey,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        if (svodOn) {
-            // Свод: правка не «своя копия», а новая версия на сервере — её получат
-            // и веб, и службы компа. Промпты обычно правят автоматы (тюнер, ночной разбор).
-            Text(
-                "Текст живёт в Своде на сервере Дел (${PromptStore.svodKey(id)}" +
-                    (ru.zf.pravka.core.Svod.current[PromptStore.svodKey(id)]?.let { ", версия ${it.rev}" } ?: ", ещё не отдан") +
-                    "). «Сохранить» уйдёт на сервер — для всех, а не только для телефона.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-        } else if (id == PromptStore.PromptId.TASKS_DELA) {
-            // Правила разбора дел — общие с сервером: файл server/contract/prompts/raznoska.txt
-            // читают и телефон, и веб. Своя правка здесь живёт только на этом телефоне.
-            Text(
-                if (own == null) "Правила — общие с сервером Дел: тем же текстом разбирает веб. " +
-                    "Поменять их для обоих — правкой файла server/contract/prompts/raznoska.txt; " +
-                    "здесь своё у телефона — только словарь и наговор в конце."
-                else "Этот текст правлен на телефоне и больше НЕ общий с сервером: веб разбирает " +
-                    "общим, телефон — твоим. Напоминаний и времени дел в твоём тексте может не быть. " +
-                    "«Вернуть заводской» — снова общий. Когда сервер Дел узнает Свод, правка уйдёт на сервер.",
-                style = MaterialTheme.typography.bodySmall,
-                color = if (own == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
-            )
-            Spacer(Modifier.height(8.dp))
-        }
-
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it; error = null; savedMark = false },
-            enabled = loaded,
-            textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 13.sp),
-            keyboardOptions = KeyboardOptions(
-                capitalization = KeyboardCapitalization.None,
-                autoCorrectEnabled = false,
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 320.dp),
-        )
-        Text(
-            stringResource(R.string.prompt_char_count, text.length, text.length / 3),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        error?.let {
-            Text(stringResource(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        warning?.let {
-            Text(stringResource(it), color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.bodySmall)
-        }
-        Spacer(Modifier.height(12.dp))
-
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            PaperButton(
-                stringResource(if (confirmReset) R.string.prompt_reset_confirm else R.string.prompt_reset),
-                icon = Glyphs.Undo,
-                onClick = {
-                if (confirmReset) {
-                    scope.launch {
-                        promptStore.resetToFactory(id)
-                        text = promptStore.raw(id)
-                        confirmReset = false
-                        savedMark = false
-                        error = null
-                        warning = null
-                    }
-                } else {
-                    confirmReset = true
-                }
-                },
-            )
-            Spacer(Modifier.weight(1f))
-            PaperButton(
-                stringResource(if (savedMark) R.string.settings_saved else R.string.settings_save),
-                icon = if (savedMark) Glyphs.Check else null,
-                primary = true,
-                onClick = {
-                    // Placeholders live only in the CLEAN master prompt; BUSINESS
-                    // and SOFTEN are directives layered on top of it.
-                    val ok = if (id == PromptStore.PromptId.CLEAN_CLAUDE) {
-                        if (!text.contains(Prompts.PLACEHOLDER_INPUT)) {
-                            error = R.string.prompt_error_no_input
-                            false
-                        } else {
-                            warning = when {
-                                !text.contains(Prompts.PLACEHOLDER_DICT) -> R.string.prompt_warning_no_dict
-                                else -> null
-                            }
-                            true
-                        }
-                    } else true
-                    if (ok) scope.launch {
-                        promptStore.setOverride(id, text)
-                        savedMark = true
-                    }
-                },
-            )
-        }
-    }
-}
-
-/** Порядок карусели: «Сегодня», Дела, Спорт, Еда, Деньги (баг №12). */
-private val RING = listOf(Tab.TODAY, Tab.TODOIST, Tab.SPORT, Tab.FOOD, Tab.MONEY)
-
-/**
- * Карусель «Сегодня» и режимов. Экраны меняются только плашками и «назад»:
- * взмах вбок больше не листает экраны (владелец 19.10.2026: «из-за этого
- * нельзя нормально листать дела» — горизонтальный жест в списке дел и в
- * странице /t уводил на соседний экран). Вкладка [tab] и страница пейджера
- * держатся вместе: плашка или «назад» меняют вкладку — пейджер встаёт туда
- * сразу, без проезда через соседей; [onSettle] — на случай, если страницу
- * сменит не вкладка. Соседи не собираются: держать Дела и Деньги собранными,
- * пока смотришь «Сегодня», — лишняя работа.
- */
-@Composable
-private fun RingPager(ring: List<Tab>, tab: Tab, onSettle: (Tab) -> Unit, page: @Composable (Tab) -> Unit) {
-    val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = ring.indexOf(tab).coerceAtLeast(0)) { ring.size }
-    LaunchedEffect(tab, ring) {
-        val i = ring.indexOf(tab)
-        if (i >= 0 && i != pager.settledPage && !pager.isScrollInProgress) pager.scrollToPage(i)
-    }
-    val settle by androidx.compose.runtime.rememberUpdatedState(onSettle)
-    LaunchedEffect(pager, ring) {
-        androidx.compose.runtime.snapshotFlow { pager.settledPage }.collect { i -> ring.getOrNull(i)?.let { settle(it) } }
-    }
-    androidx.compose.foundation.pager.HorizontalPager(
-        state = pager,
-        key = { ring[it].name },
-        modifier = Modifier.fillMaxSize(),
-        userScrollEnabled = false,
-    ) { i -> page(ring[i]) }
 }

@@ -53,31 +53,6 @@ import ru.zf.pravka.core.ModeGlow
 // переходом, без пульса: пульсацию кнопки владелец снял («дрожание отвлекает»).
 
 /**
- * Цвет кнопки режима на стекле — отсюда свет вкладки и одежда строки ввода.
- * Константы берутся у самих кнопок: один цвет на стекле и в приложении, а не
- * два похожих. Еда — оливой своей вкладки: на стекле у неё общая с Телом
- * зелёная «Е», а вкладка оливковая, и свет должен быть цвета вкладки.
- * Служебным экранам своего света нет: там читают списки, а не день.
- */
-val ModeDecor.glowAccent: Int?
-    get() = when (this) {
-        ModeDecor.PRAVKA -> ru.zf.pravka.trigger.FloatingButtonController.ACCENT
-        ModeDecor.ZASECHKA -> ru.zf.pravka.trigger.ZasechkaButtonController.AMBER
-        ModeDecor.DELA -> ru.zf.pravka.trigger.RaznoskaButtonController.INK
-        ModeDecor.SPORT -> ru.zf.pravka.trigger.BodyButtonController.INK
-        ModeDecor.FOOD -> FOOD_OLIVE
-        ModeDecor.MONEY -> ru.zf.pravka.trigger.PravkaAccessibilityService.MONEY_INK
-        ModeDecor.TODAY, ModeDecor.SERVICE -> null
-    }
-
-/** Олива Еды — тот же тон, что у краски вкладки (`ModeDecor.tint`, светлая ветка). */
-private val FOOD_OLIVE = 0xFF5E7A1F.toInt()
-
-/** Цвет пилюли строки ввода: свой у режима, у служебных — родной оранжевый «П». */
-val ModeDecor.pillAccent: Int
-    get() = glowAccent ?: ru.zf.pravka.trigger.FloatingButtonController.ACCENT
-
-/**
  * Кто во вкладке сейчас ждёт Claude. Счётчик, а не флаг: в одной вкладке
  * бывает два ожидания сразу (вопрос тренеру и разбор подхода), и первое
  * кончившееся не должно гасить свет второго.
@@ -87,16 +62,6 @@ class GlowState {
 }
 
 val LocalGlowState = compositionLocalOf<GlowState?> { null }
-
-/** Пока [active] — вкладка ждёт Claude, и её свет ярче. Ставится там, где видно ожидание. */
-@Composable
-fun GlowBusy(active: Boolean) {
-    val state = LocalGlowState.current ?: return
-    DisposableEffect(state, active) {
-        if (active) state.busy++
-        onDispose { if (active) state.busy-- }
-    }
-}
 
 /**
  * Насколько приглушить свет экрана — «Сегодня» со сжатой шапкой смотрит в
@@ -266,15 +231,4 @@ fun rememberClaudeSeconds(work: StateFlow<PravkaApp.LiveWork?>): State<String?> 
         }
     }
     return seconds
-}
-
-/**
- * Ждёт ли Claude на одной из дорог [routes] прямо сейчас — для пилюль, чья
- * работа идёт в службе (Дела, Деньги, еда голосом): вкладка своего флага не
- * держит, а поток запросов общий на всё приложение.
- */
-@Composable
-fun rememberRouteBusy(work: StateFlow<PravkaApp.LiveWork?>, vararg routes: String): Boolean {
-    val live by work.collectAsState()
-    return live?.route?.let { it in routes } == true
 }

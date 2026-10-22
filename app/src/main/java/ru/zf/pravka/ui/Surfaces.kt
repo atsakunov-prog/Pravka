@@ -196,15 +196,6 @@ private fun cornerOf(o: Outline): Float = when (o) {
     else -> 0f
 }
 
-/** Стекло текущего режима: `Modifier.glass(shape, LocalMode.current.glass)`. */
-@Composable
-fun Modifier.modeGlass4(shape: Shape, shadow: Boolean = true): Modifier =
-    this.glass(shape, LocalMode.current.glass, shadow)
-
-// ---------------------------------------------------------------------------
-// Клавиши
-// ---------------------------------------------------------------------------
-
 /**
  * Свет клавиши — ровно числа кнопок на диске (`trigger/BubbleSkin.kt`).
  * Владелец, 07.10.2026 (баг №3): «на самих кнопках внутри приложения
@@ -455,41 +446,6 @@ private fun DrawScope.drawCoin(key: Color) {
 // Штриховка
 // ---------------------------------------------------------------------------
 
-/**
- * Штриховка (DESIGN §4.3): полосы под 135° — 2 dp краски и просвет той же
- * краски @ [gapAlpha] (0.30 у потерь, 0.07 у «впереди»), период [period].
- * Рисуется по прямоугольнику [topLeft]–[size] внутри уже заданного клипа.
- */
-fun DrawScope.hatch(
-    color: Color,
-    gapAlpha: Float,
-    topLeft: Offset = Offset.Zero,
-    size: Size = this.size,
-    stripeAlpha: Float = color.alpha,
-    period: Dp = 5.dp,
-) {
-    val p = period.toPx()
-    val stripe = 2.dp.toPx()
-    drawRect(color.copy(alpha = gapAlpha), topLeft, size)
-    // Полоса «/»: от низа-слева к верху-справа; шаг по горизонтали — p·√2.
-    val step = p * 1.41421f
-    val w = size.width
-    val h = size.height
-    var x = -h
-    val brush = color.copy(alpha = stripeAlpha)
-    clipPath(Path().apply { addRect(androidx.compose.ui.geometry.Rect(topLeft, size)) }) {
-        while (x < w + h) {
-            drawLine(
-                brush,
-                start = Offset(topLeft.x + x, topLeft.y + h),
-                end = Offset(topLeft.x + x + h, topLeft.y),
-                strokeWidth = stripe,
-            )
-            x += step
-        }
-    }
-}
-
 /** Кнопка без лица — зона касания 48 dp вокруг маленькой видимой цели (DESIGN §3.8). */
 @Composable
 fun Modifier.tap(onClick: () -> Unit, label: String? = null, enabled: Boolean = true): Modifier =
@@ -501,6 +457,3 @@ fun Modifier.tap(onClick: () -> Unit, label: String? = null, enabled: Boolean = 
         onClickLabel = label,
         onClick = onClick,
     )
-
-/** Прямоугольник без формы — для `glass` у полос во всю ширину. */
-val NoShape: Shape = RectangleShape

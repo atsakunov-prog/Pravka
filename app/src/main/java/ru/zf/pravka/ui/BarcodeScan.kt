@@ -16,33 +16,6 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 // камерой, и КБЖУ читает модель.
 
 /**
- * Показывает сканер и отдаёт распознанный код в [onCode]. Отмена - молча:
- * владелец передумал, говорить ему об этом незачем. [onFail] зовётся только
- * когда сканер правда не заработал (нет сервисов Google, отказали в модуле).
- */
-fun scanBarcode(
-    context: Context,
-    onFail: (String) -> Unit,
-    onCode: (String) -> Unit,
-) {
-    runCatching {
-        GmsBarcodeScanning.getClient(context)
-            .startScan()
-            .addOnSuccessListener { barcode ->
-                val code = barcode.rawValue?.filter { it.isDigit() }.orEmpty()
-                if (code.length >= 6) onCode(code)
-                else onFail("Это не штрихкод товара — сними этикетку камерой")
-            }
-            .addOnFailureListener { e ->
-                onFail("Сканер не заработал: ${e.message ?: "нет сервисов Google"}")
-            }
-            .addOnCanceledListener { }
-    }.onFailure { e ->
-        onFail("Сканер недоступен: ${e.message ?: e.javaClass.simpleName}")
-    }
-}
-
-/**
  * Тот же сканер Play Services, но строка — как есть: QR архива
  * («pravka-archive:{…}») несёт адрес и токен, цифры из него не выбираются.
  */

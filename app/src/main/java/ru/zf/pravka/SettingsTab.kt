@@ -98,114 +98,25 @@ internal enum class SettingsGroup(
     val decor: ModeDecor = ModeDecor.SERVICE,
 ) {
     PROFILE("Кто пользуется", "имя, род, какие режимы включены", SettingsShelf.MODES, { Glyphs.Tune }),
-    // Правка 4.0: главный экран — свои пункты (DESIGN §12.11).
-    TODAY("Сегодня", "время сна, погода, календари, отметки, бюджет", SettingsShelf.MODES, { Glyphs.Sunny }, ModeDecor.TODAY),
     PRAVKA("Правка", "проза, контекст, правила в промпте", SettingsShelf.MODES, { Glyphs.Pravka }, ModeDecor.PRAVKA),
     ZASECHKA("Засечка", "напоминания, категории, автопилот, NFC", SettingsShelf.MODES, { Glyphs.Zasechka }, ModeDecor.ZASECHKA),
-    DELA("Дела", "кнопка «Д», сервер или Todoist", SettingsShelf.MODES, { Glyphs.Delo }, ModeDecor.DELA),
-    SPORT("Спорт", "отдых, выгрузка, цель веса, справочник", SettingsShelf.MODES, { Glyphs.Sport }, ModeDecor.SPORT),
     FOOD("Еда", "цели КБЖУ, лента, intervals", SettingsShelf.MODES, { Glyphs.Food }, ModeDecor.FOOD),
     MONEY("Деньги", "пуши банка", SettingsShelf.MODES, { Glyphs.Money }, ModeDecor.MONEY),
     VOICE("Микрофон и распознавание", "телефон или гарнитура, движок", SettingsShelf.VOICE, { Glyphs.Mic }),
     MODELS("Модели", "какая модель и с каким усилием", SettingsShelf.VOICE, { Glyphs.Spark }),
-    SVOD("Свод", "промпты, словарь, правила — правда на сервере", SettingsShelf.VOICE, { Glyphs.Archive }),
-    NET("Связь с облаками", "проверка Google и Claude, журнал, неделя доступа", SettingsShelf.VOICE, { Glyphs.Wifi }),
     ANTHROPIC("Anthropic", "ключ API", SettingsShelf.LINKS, { Glyphs.Key }),
     DELA_SERVER("Дела", "свой сервер дел, QR, выбор Todoist / Дела", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
-    TODOIST("Todoist", "запасная дорога дел", SettingsShelf.LINKS, { Glyphs.Delo }, ModeDecor.DELA),
     INTERVALS("intervals.icu", "тренировки, сон, вес", SettingsShelf.LINKS, { Glyphs.Activity }, ModeDecor.SPORT),
     CLOUD("Облако семьи", "домашний сервер: общие Деньги, копии базы", SettingsShelf.LINKS, { Glyphs.Cloud }),
     ARCHIVE("Архив", "вся жизнь на компе, к ней ходит Claude", SettingsShelf.LINKS, { Glyphs.Archive }),
     BUTTONS("Кнопки на экране", "какие, круг или стопка, размер", SettingsShelf.LOOK, { Glyphs.Disk }),
     DISK("Вид диска", "стекло, плотности, тени, инерция", SettingsShelf.LOOK, { Glyphs.Palette }),
     CARDS("Вид приложения", "тема, сервисы внутри или в браузере, «Вид 4.0»", SettingsShelf.LOOK, { Glyphs.Layers }),
-    // Владелец, 07.10.2026: «нам в самом приложении тоже нужна история, что он
-    // починил по каждому багу (в настройках, думаю, „Баги“)».
-    BUGS("Баги", "что починено по каждому, по сборкам; что ждёт ночного разбора", SettingsShelf.APP, { Glyphs.Bug }),
     DATA("База данных", "где лежит, переезд в папку, как копировать", SettingsShelf.APP, { Glyphs.Archive }),
     APP("Обновления и служба", "служба, обновления, копии ленты, отладка", SettingsShelf.APP, { Glyphs.Phone }),
     ;
 
     val glyph: ImageVector get() = glyphOf()
-}
-
-@Composable
-internal fun SettingsTab(
-    app: PravkaApp,
-    serviceEnabled: Boolean,
-    onOpenAccessibilitySettings: () -> Unit,
-    onOpen: (SettingsGroup) -> Unit,
-) {
-    // Разворот: слева служба и полки «Режимы», «Голос и Claude», справа —
-    // «Подключения», «Кнопки и вид», «Приложение».
-    ru.zf.pravka.ui.SplitColumns { side ->
-        val left = side != 2
-        val right = side != 1
-        if (left) {
-        // Самым верхним — «Проверить обновления» (владелец, 01.10.2026:
-        // «вытаскивать эту кнопку и дальше нажимать из шестерёнки… очень
-        // каждый раз сложно, потому что у края экрана не получается»).
-        UpdateNowCard(app)
-        // Служба и обновления — одной строкой сверху: без службы не работает ни
-        // одна кнопка, и «есть свежая сборка» должно быть видно, не открывая
-        // ничего. Тап — экран «Обновления и служба».
-        StatusStrip(app, serviceEnabled, onOpenAccessibilitySettings) { onOpen(SettingsGroup.APP) }
-        // База в папке, а доступа к файлам нет — лента пустая не потому, что
-        // пустая. Говорим сверху, а не только красной точкой на полке.
-        val dbWhere by ru.zf.pravka.data.DataRoot.where.collectAsState()
-        if (dbWhere == ru.zf.pravka.data.DataRoot.Where.FOLDER_NO_ACCESS) {
-            PaperCard {
-                PaperRow(
-                    title = "База недоступна",
-                    hint = "нет доступа к файлам — лента, еда и деньги не читаются",
-                    icon = Glyphs.Archive,
-                    badgeTint = MaterialTheme.colorScheme.error,
-                    trailing = { StatusDot(false) },
-                    onClick = { onOpen(SettingsGroup.DATA) },
-                )
-            }
-        }
-
-        }
-        // Группы выключенного в профиле режима не показываются: их настройки
-        // ни на что не действуют. Вернуть режим — «Кто пользуется».
-        val profile by app.profileStore.flow.collectAsState()
-        for (shelf in SettingsShelf.entries) {
-            val leftShelf = shelf == SettingsShelf.MODES || shelf == SettingsShelf.VOICE
-            if (if (leftShelf) !left else !right) continue
-            val groups = SettingsGroup.entries.filter { it.shelf == shelf && it != SettingsGroup.APP }
-                .filter { g -> g.modes.isEmpty() || g.modes.any { m -> profile?.has(m) ?: true } }
-            if (groups.isEmpty()) continue
-            PaperCard(label = shelf.label) {
-                groups.forEachIndexed { i, g ->
-                    if (i > 0) RowRule()
-                    val status = groupStatus(app, g)
-                    PaperRow(
-                        title = g.title,
-                        hint = g.hint,
-                        icon = g.glyph,
-                        badgeTint = if (g.decor == ModeDecor.SERVICE) null
-                        else g.decor.tint(MaterialTheme.colorScheme).primary,
-                        status = status?.text,
-                        statusColor = when (status?.ok) {
-                            false -> MaterialTheme.colorScheme.error
-                            else -> null
-                        },
-                        trailing = status?.let { st -> if (st.dot) ({ StatusDot(st.ok) }) else null },
-                        onClick = { onOpen(g) },
-                    )
-                }
-            }
-        }
-        if (right) PaperHint(
-            stringResource(
-                R.string.build_info,
-                BuildConfig.VERSION_NAME,
-                BuildConfig.VERSION_CODE,
-                BuildConfig.BUILD_TIME,
-            )
-        )
-    }
 }
 
 /**
@@ -215,11 +126,10 @@ internal fun SettingsTab(
 internal val SettingsGroup.modes: Set<ru.zf.pravka.data.Profile.Mode>
     get() = when (this) {
         SettingsGroup.ZASECHKA -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA)
-        SettingsGroup.DELA, SettingsGroup.TODOIST, SettingsGroup.DELA_SERVER -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
-        SettingsGroup.SPORT -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT)
+        SettingsGroup.DELA_SERVER -> setOf(ru.zf.pravka.data.Profile.Mode.DELA)
         SettingsGroup.FOOD -> setOf(ru.zf.pravka.data.Profile.Mode.FOOD)
         SettingsGroup.MONEY -> setOf(ru.zf.pravka.data.Profile.Mode.MONEY)
-        SettingsGroup.INTERVALS -> setOf(ru.zf.pravka.data.Profile.Mode.SPORT, ru.zf.pravka.data.Profile.Mode.FOOD)
+        SettingsGroup.INTERVALS -> setOf(ru.zf.pravka.data.Profile.Mode.ZASECHKA, ru.zf.pravka.data.Profile.Mode.FOOD)
         else -> emptySet()
     }
 
@@ -235,11 +145,6 @@ internal class GroupStatus(val text: String, val ok: Boolean? = null, val dot: B
 internal fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
     val s = app.settings
     return when (g) {
-        SettingsGroup.BUGS -> {
-            val items by app.feedbackStore.flow.collectAsState()
-            val waiting = items.count { it.open }
-            if (waiting > 0) GroupStatus("ждут: $waiting") else if (items.isNotEmpty()) GroupStatus("всё разобрано", ok = true, dot = true) else null
-        }
         SettingsGroup.VOICE -> {
             val phone by s.phoneMicOnlyFlow.collectAsState(initial = true)
             GroupStatus(if (phone) "телефон" else "гарнитура")
@@ -248,22 +153,9 @@ internal fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
             val changed by remember { s.modelChoicesChangedFlow() }.collectAsState(initial = 0)
             if (changed > 0) GroupStatus("своих: $changed") else GroupStatus("заводские")
         }
-        SettingsGroup.SVOD -> {
-            val v by app.svodStore.view.collectAsState()
-            when {
-                v.pending.isNotEmpty() -> GroupStatus("ждёт отправки: ${v.pending.size}")
-                v.entries.isEmpty() -> GroupStatus("пусто")
-                else -> GroupStatus("записей: ${v.entries.size}", ok = true, dot = true)
-            }
-        }
         SettingsGroup.ANTHROPIC -> {
             val key by s.apiKeyFlow.collectAsState(initial = "")
             keyStatus(key.isNotBlank())
-        }
-        SettingsGroup.TODOIST -> {
-            val token by s.todoistTokenFlow.collectAsState(initial = "")
-            val onServer by app.delaServer.collectAsState()
-            if (onServer && token.isNotBlank()) GroupStatus("запас") else keyStatus(token.isNotBlank())
         }
         SettingsGroup.DELA_SERVER -> {
             val link by app.delaSync.link.collectAsState()
@@ -283,12 +175,10 @@ internal fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
         }
         SettingsGroup.CLOUD -> {
             val home by app.homeServer.saved.collectAsState()
-            val sync by app.moneyCloudSync.status.collectAsState()
             val copy by app.cloudBackup.status.collectAsState()
             when {
                 home == null -> GroupStatus("не задано", ok = null, dot = true)
-                sync.error.isNotBlank() || copy.error.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
-                sync.idle.isNotBlank() -> GroupStatus("обмен стоит", ok = false, dot = true)
+                copy.error.isNotBlank() -> GroupStatus("ошибка", ok = false, dot = true)
                 else -> GroupStatus("подключён", ok = true, dot = true)
             }
         }
@@ -317,24 +207,6 @@ internal fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
                     "Е".takeIf { e && on(ru.zf.pravka.data.Profile.Mode.FOOD) },
                 ).joinToString(" ")
             )
-        }
-        SettingsGroup.NET -> {
-            // Второе место, где видно доступ, — прямо в меню: Google и Claude
-            // по последней проверке, не заходя внутрь.
-            val on by app.settings.netProbeFlow.collectAsState(initial = true)
-            val last by app.netProbeStore.last.collectAsState()
-            LaunchedEffect(Unit) { withContext(Dispatchers.IO) { app.netProbeStore.warm() } }
-            val p = last
-            when {
-                p == null -> GroupStatus(if (on) "ещё не проверял" else "выкл")
-                else -> {
-                    val main = listOf(ru.zf.pravka.core.NetProbe.Target.GOOGLE, ru.zf.pravka.core.NetProbe.Target.CLAUDE)
-                    val text = main.joinToString(" · ") { t ->
-                        "${t.short} " + when (p.hits[t]?.ok) { true -> "есть"; false -> "НЕТ"; null -> "—" }
-                    } + if (!on) " · выкл" else ""
-                    GroupStatus(text, ok = main.all { p.hits[it]?.ok == true }, dot = true)
-                }
-            }
         }
         SettingsGroup.PROFILE -> {
             val p by app.profileStore.flow.collectAsState()
@@ -489,19 +361,13 @@ private fun GroupContent(
 ) {
     when (group) {
         SettingsGroup.PROFILE -> ProfileSettings(app)
-        SettingsGroup.TODAY -> TodaySettings(app)
         SettingsGroup.PRAVKA -> PravkaSettings(app)
         SettingsGroup.ZASECHKA -> ZasechkaSettings(app)
-        SettingsGroup.DELA -> DelaSettings(app, onOpen)
-        SettingsGroup.SPORT -> BodySportSettings(app)
         SettingsGroup.FOOD -> BodyFoodSettings(app)
         SettingsGroup.MONEY -> MoneySettings(app)
         SettingsGroup.VOICE -> VoiceSettings(app)
         SettingsGroup.MODELS -> ModelsSettings(app)
-        SettingsGroup.SVOD -> SvodSettings(app)
-        SettingsGroup.NET -> NetProbeSettings(app)
         SettingsGroup.ANTHROPIC -> AnthropicSettings(app)
-        SettingsGroup.TODOIST -> TodoistSettings(app)
         SettingsGroup.DELA_SERVER -> DelaServerSettings(app)
         SettingsGroup.INTERVALS -> IntervalsSettings(app)
         SettingsGroup.CLOUD -> FamilyCloudSettings(app)
@@ -509,7 +375,6 @@ private fun GroupContent(
         SettingsGroup.BUTTONS -> ButtonsSettings(app)
         SettingsGroup.DISK -> DiskSettings(app)
         SettingsGroup.CARDS -> CardsSettings(app)
-        SettingsGroup.BUGS -> FeedbackHistory(app)
         SettingsGroup.DATA -> DataSettings(app)
         SettingsGroup.APP -> AppSettings(app, serviceEnabled, onOpenAccessibilitySettings)
     }
@@ -1688,42 +1553,4 @@ private fun PravkaSettings(app: PravkaApp) {
     // своей плашкой: владелец (16.09) хотел их там, а не среди настроек.
     // Распознавание речи — в «Микрофоне и распознавании»: движок один на все
     // диктовки.
-}
-
-/** Дела: кнопка «Д» и дорога к Todoist. */
-@Composable
-private fun DelaSettings(app: PravkaApp, onOpen: (SettingsGroup) -> Unit) {
-    val d by app.settings.rEnabledFlow.collectAsState(initial = true)
-    val token by app.settings.todoistTokenFlow.collectAsState(initial = "")
-    PaperCard(label = "кнопка") {
-        PaperToggle(
-            "Кнопка «Д» на экране",
-            d,
-            { v -> app.appScope.launch { app.settings.setREnabled(v) } },
-            hint = "наговорил — задачи разложились по проектам",
-        )
-    }
-    val onServer by app.delaServer.collectAsState()
-    val link by app.delaSync.link.collectAsState()
-    PaperCard(label = "подключение") {
-        PaperRow(
-            title = "Дела — свой сервер",
-            hint = if (onServer) "дела ходят сюда" else "QR с компа, выбор Todoist / Дела",
-            icon = Glyphs.Delo,
-            badgeTint = MaterialTheme.colorScheme.primary,
-            status = if (link != null) "подключено" else "нет",
-            trailing = { StatusDot(if (link != null) true else null) },
-            onClick = { onOpen(SettingsGroup.DELA_SERVER) },
-        )
-        PaperRow(
-            title = "Todoist",
-            hint = if (onServer) "запасная дорога" else "токен — дела ходят сюда",
-            icon = Glyphs.Delo,
-            badgeTint = MaterialTheme.colorScheme.primary,
-            status = if (token.isNotBlank()) "есть" else "нет ключа",
-            trailing = { StatusDot(if (token.isNotBlank()) true else null) },
-            onClick = { onOpen(SettingsGroup.TODOIST) },
-        )
-    }
-    RaznoskaRoutesCard(app)
 }
