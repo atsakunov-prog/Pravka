@@ -21,6 +21,7 @@ import ru.zf.pravka.R
 import ru.zf.pravka.core.ProofreadEngine
 import ru.zf.pravka.core.ProofreadMode
 import ru.zf.pravka.core.UndoStack
+import ru.zf.pravka.data.PendingTakes
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.provider.GoogleSpeechSession
 import ru.zf.pravka.target.AccessibilityTarget
@@ -358,6 +359,8 @@ internal fun PravkaAccessibilityService.onFoodText(raw: String) {
                 recordFood(parsed.meal.id)
             },
             onFailure = { e ->
+                // Нет связи с Claude — фраза ждёт в очереди и сама станет приёмом своего времени (22.10.2026).
+                if (queueOffline(PendingTakes.Kind.FOOD, text, e)) return@fold
                 // Слова не теряем: неразобранное ждёт во вкладке Спорта.
                 runCatching { app.strengthStore.addRaw(text, "food") }
                 Haptics.error(this@onFoodText)

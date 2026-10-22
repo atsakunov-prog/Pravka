@@ -220,6 +220,8 @@ class Settings(private val context: Context) {
         /** Прежнее заводское (27.09–13.10.2026) — переезжает на новое один раз, [retireOldWakeDeal]. */
         private val OLD_FACTORY_WAKE_DEAL = PlaceDeal("Сборы детей", "Семья")
         private val KEY_WAKE_DEAL_MOVED = booleanPreferencesKey("auto_wake_deal_moved_v2")
+        /** Правка на диете (22.10.2026) — один раз: [slimOnce]. */
+        private val KEY_SLIM_DONE = booleanPreferencesKey("slim_v1_done")
 
         /**
          * Ключи снятых интеграций (12.10.2026: Notion и Google Sheets).
@@ -1543,6 +1545,20 @@ class Settings(private val context: Context) {
      * владелец просил «просыпаюсь», а сохранённая копия старого заводского
      * держала бы «Сборы детей» вечно. Своё дело владельца не трогается.
      */
+    /**
+     * Правка на диете (22.10.2026), один раз: кнопка «Д» уходит со стекла (дела владелец не диктует ей — «З» и
+     * «сказать» отдают их серверу той же дверью, режим Дел остаётся включённым), ночной разбор выключен. Потом
+     * тумблеры — снова слово владельца.
+     */
+    suspend fun slimOnce() {
+        context.dataStore.edit { p ->
+            if (p[KEY_SLIM_DONE] == true) return@edit
+            p[KEY_SLIM_DONE] = true
+            p[KEY_R_ENABLED] = false
+            p[KEY_NIGHT_REVIEW] = false
+        }
+    }
+
     suspend fun retireOldWakeDeal() {
         context.dataStore.edit { p ->
             if (p[KEY_WAKE_DEAL_MOVED] == true) return@edit

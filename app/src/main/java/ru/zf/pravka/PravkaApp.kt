@@ -127,6 +127,8 @@ class PravkaApp : Application() {
         // Дело по подъёму: сохранённое прежнее заводское «Сборы детей» — на
         // «Просыпаюсь» (13.10.2026), один раз.
         appScope.launch { runCatching { settings.retireOldWakeDeal() } }
+        // Правка на диете (22.10.2026): «Д» со стекла и ночной разбор — один раз.
+        appScope.launch { runCatching { settings.slimOnce() } }
         // Тень снята (18.09.2026; владелец: «убери эту тень, она снова запустилась
         // и ест деньги»): её прогоны, застрявшие активными, закрываются, движка
         // больше нет. Затем — ревизия батчей у Anthropic: всё идущее, за чем в
@@ -142,14 +144,6 @@ class PravkaApp : Application() {
         // Только у самого владельца: у Марианны это были бы чужие 3,88 млн.
         if (profileStore.owner && profileStore.has(ru.zf.pravka.data.Profile.Mode.MONEY)) {
             appScope.launch { runCatching { moneyEngine.seedManual() } }
-        }
-        // Общие Деньги через облако семьи (data/MoneyCloudSync.kt): правка
-        // уходит через полминуты тишины, а не с каждым нажатием; дальше —
-        // тик службы раз в пять минут. Нет входа или Деньги выключены — молчит.
-        appScope.launch(kotlinx.coroutines.Dispatchers.Default) {
-            @OptIn(kotlinx.coroutines.FlowPreview::class)
-            moneyStore.stateFlow.drop(1).debounce(30_000L)
-                .collect { runCatching { moneyCloudSync.sync("правка") } }
         }
         // Архив на компе: пока он подключён, каждый ввод режима уходит через
         // несколько секунд тишины (data/ArchiveSync.kt). Не подключён — сторы
@@ -210,8 +204,7 @@ class PravkaApp : Application() {
                 claudeProvider.requestLogger = if (on) ({ text -> requestLog.add(text) }) else null
             }
         }
-        // Настройки телефона на сервере (14.10.2026): следить за своими и раз в пять минут — пульс и правки с компьютера.
-        phoneRemote.start()
+        // Настройки телефона с компьютера и обмен Денег через облако семьи сняты (22.10.2026, Правка на диете).
         claudeSpend.start()
         // Напоминания Дел уведомлением телефона (захват, 15.10.2026): следить за копией — будильник на ближайшее; тумблер
         // «Напоминания на телефоне» поменялся — сказать серверу (бот ждёт или шлёт сразу) и переставить будильник.
@@ -511,8 +504,6 @@ class PravkaApp : Application() {
         ).also { sync ->
             // Команды Засечки из веба (docs/zasechka.md «Команды из веба»): синк отдаёт их сюда.
             sync.onZasechka = { cmds -> zasechkaWeb.onSync(cmds) }
-            // Настройки телефона на сервере (14.10.2026): поле phone синка — правки с компьютера (PhoneRemoteSync).
-            sync.listen { resp -> phoneRemote.onSync(resp) }
             sync.listen { resp -> claudeSpend.onSync(resp) }
             // Режим отладки (15.10.2026): поле debug синка — рисовать ли строку «Что не так?» (DelaDebugSync).
             sync.listen { resp -> delaDebug.onSync(resp) }
@@ -956,6 +947,9 @@ class PravkaApp : Application() {
             owner = { profileStore.current.let { it == null || it.owner } },
         )
     }
+
+    // Сказанное, которое не дошло до Claude: еда, траты, засечка ждут связи и разбираются заново (22.10.2026).
+    internal val pendingTakes by lazy { ru.zf.pravka.data.PendingTakes(this) }
 
     // Еда: дневник приёмов с КБЖУ. Незаменимые данные - как лента.
     val foodStore by lazy {

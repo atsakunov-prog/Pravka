@@ -97,9 +97,9 @@ class Reminders(private val app: PravkaApp) {
      * старый — всё по-старому: шлёт бот, телефон молчит (иначе напоминание пришло бы дважды).
      */
     suspend fun on(): Boolean {
-        if (!app.delaOnServer() || !app.profileStore.has(Profile.Mode.DELA)) return false
-        app.delaStore.load()
-        return app.delaStore.view.value.remindPhoneOn && app.settings.remindPhoneFlow.first() && notificationsOn() && channelOn()
+        // Правка на диете (22.10.2026): телефон напоминаний не показывает — шлёт бот в Telegram сразу. syncSetting
+        // один раз скажет это серверу («0»), fire снимет будильник.
+        return false
     }
 
     /**

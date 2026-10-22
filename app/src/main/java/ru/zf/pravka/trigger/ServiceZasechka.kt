@@ -493,7 +493,23 @@ internal fun PravkaAccessibilityService.recordZasechkaEntry(
         val tail = listOf(entry.category, entry.client)
             .filter { it.isNotBlank() }
             .joinToString(" · ")
+        // Сырая из-за обрыва связи: запись стоит на своём месте, разбор догонит очередь (22.10.2026).
+        val queued = outcome.offline && !outcome.categorized && outcome.action == "new" && runCatching {
+            app.pendingTakes.add(
+                ru.zf.pravka.data.PendingTakes.Kind.ZASECHKA, text, entry.start, source,
+                entryId = entry.id, error = outcome.error.orEmpty(),
+            )
+        }.isSuccess
         when {
+            // Поправка к записи не разобралась (нет модели): лента как была.
+            outcome.action == "none" && !outcome.categorized -> {
+                Haptics.error(this@recordZasechkaEntry)
+                zButton?.showNote(
+                    "✏️ Поправку не разобрал (${outcome.error ?: "без причины"}) — запись как была",
+                    ok = false,
+                    holdMs = 4_000,
+                )
+            }
             outcome.action == "none" -> {
                 Haptics.success(this@recordZasechkaEntry)
                 zButton?.showNote(
@@ -534,6 +550,15 @@ internal fun PravkaAccessibilityService.recordZasechkaEntry(
                 zButton?.showNote(
                     "⏱ ${entry.title}\nс ${zTime(entry.start)}" +
                         (if (tail.isBlank()) "" else " · $tail")
+                )
+            }
+            queued -> {
+                app.eventLog.add("очередь: засечка «${entry.title}» ждёт связи — разбор догонит")
+                Haptics.error(this@recordZasechkaEntry)
+                zButton?.showNote(
+                    "⏱ ${entry.title}\nс ${zTime(entry.start)} — нет связи с Claude, категорию допишу сам",
+                    ok = false,
+                    holdMs = 4_000,
                 )
             }
             else -> {

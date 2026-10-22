@@ -345,6 +345,8 @@ internal fun PravkaAccessibilityService.onMoneyText(raw: String) {
             }
         mButton?.setBusy(false)
         val takeId = result.getOrElse { e ->
+            // Нет связи с Claude — наговор ждёт в очереди и сам ляжет тратами своего дня (22.10.2026).
+            if (queueOffline(ru.zf.pravka.data.PendingTakes.Kind.MONEY, text, e)) return@launch
             Haptics.error(this@onMoneyText)
             // Причина целиком: «не вышло» без причины читается как поломка.
             Feedback.toast(this@onMoneyText, "Не разобрал (${e.message}). Наговор сохранён.", long = true)

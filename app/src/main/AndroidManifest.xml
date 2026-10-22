@@ -191,6 +191,14 @@
             android:noHistory="true"
             android:exported="false" />
 
+        <!-- Еда снимком, из галереи или строкой без вкладки «Еда» (22.10.2026). Без noHistory: камера выходит
+             вперёд, и окно с noHistory закрылось бы, не дождавшись снимка. -->
+        <activity
+            android:name=".trigger.FoodQuickActivity"
+            android:theme="@style/Theme.Transparent"
+            android:excludeFromRecents="true"
+            android:exported="false" />
+
         <!-- Трамплин за разрешением на уведомления: служба замечает, что они
              выключены (после обновления), а спросить умеет только Activity. -->
         <activity

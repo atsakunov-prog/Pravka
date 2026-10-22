@@ -98,6 +98,9 @@ object Kovcheg {
     /** Большие кнопки — экраны, без которых приложение не обойдётся: из меню их не убрать. */
     private val MUST = listOf("today", "zasechka", "pravka")
 
+    /** Большие кнопки страницами веба Дел (веб-двойники 14.10.2026), когда своих экранов у телефона нет. */
+    private val WEB_OF = mapOf("today" to "/#/day", "zasechka" to "/#/zasechka", "pravka" to "/#/pravka")
+
     private fun g(name: String, sub: String, vararg keys: String) = Group(name, sub, keys.map { Spec(it) })
 
     /** Заводское меню — `ui.menu_factory` контракта: то, что было в коде до Свода (план §3). */
@@ -191,14 +194,25 @@ object Kovcheg {
      * Направление без единого пункта не показывается; знакомое, но не
      * поставленное в меню — в «Ещё» последним, как в вебе.
      */
-    fun build(menu: Menu, own: List<Item>, nav: List<Nav>, base: String?, zasechka: Boolean = true): Built {
+    fun build(
+        menu: Menu,
+        own: List<Item>,
+        nav: List<Nav>,
+        base: String?,
+        zasechka: Boolean = true,
+        /**
+         * Правка на диете (22.10.2026): своих экранов у телефона нет — Спорт, Еда, Деньги, CRM и сами Дела
+         * (страница `/t`) идут страницами сервера, а большие кнопки — страницами веба Дел ([WEB_OF]).
+         */
+        webScreens: Boolean = false,
+    ): Built {
         val road = LinkedHashMap<String, Item>()
         for (x in own) road[x.key] = x
         road["claude"] = Item("Claude", "claude", Target.Claude, key = "claude")
         val loose = ArrayList<Item>()
         for (n in nav) {
-            if (n.key in OWN_KEYS || n.url == "/") continue
-            val url = absolute(n.url, base) ?: continue
+            if (!webScreens && (n.key in OWN_KEYS || n.url == "/")) continue
+            val url = (if (n.url == "/") base?.let { DelaWeb.pageUrl(it) } else absolute(n.url, base)) ?: continue
             val item = Item(n.name, n.icon, Target.Web(url), key = n.key)
             if (n.key.isNotEmpty() && n.key !in road) road[n.key] = item else if (n.key.isEmpty()) loose += item
         }
@@ -212,7 +226,11 @@ object Kovcheg {
         val screens = MUST.filter { it != "zasechka" || zasechka }
         for (k in screens) {
             val (name, icon) = CATALOG.getValue(k)
-            road[k] = Item(name, icon, Target.Screen(SCREEN_OF.getValue(k)), key = k)
+            // Сервер сам назвал страницу этой кнопки (look.nav) — она сильнее заводской.
+            if (webScreens && road[k]?.target is Target.Web) continue
+            val target = if (webScreens) WEB_OF[k]?.let { absolute(it, base) }?.let { Target.Web(it) } ?: continue
+            else Target.Screen(SCREEN_OF.getValue(k))
+            road[k] = Item(name, icon, target, key = k)
         }
         val big = pick(menu.big) + pick(screens.filter { k -> menu.big.none { it.key == k } && menu.directions.none { d -> d.items.any { it.key == k } } }
             .map { k -> FACTORY.big.first { it.key == k } })

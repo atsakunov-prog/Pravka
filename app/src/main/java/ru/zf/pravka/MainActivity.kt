@@ -267,9 +267,29 @@ class MainActivity : ComponentActivity() {
             else -> null
         }
 
+    /**
+     * Просьба «еда снимком / из галереи / строкой» (кнопка «Е», пилюля, старые ярлыки) — быстрому окну еды, вкладки
+     * «Еда» больше нет (22.10.2026). true — просьба ушла туда.
+     */
+    private fun foodToQuick(intent: android.content.Intent?): Boolean {
+        val what = when (intent?.getStringExtra(EXTRA_FOOD_ACTION)) {
+            "photo" -> ru.zf.pravka.trigger.FoodQuickActivity.W_PHOTO
+            "gallery" -> ru.zf.pravka.trigger.FoodQuickActivity.W_GALLERY
+            "text" -> ru.zf.pravka.trigger.FoodQuickActivity.W_TEXT
+            else -> return false
+        }
+        intent.removeExtra(EXTRA_FOOD_ACTION)
+        startActivity(
+            android.content.Intent(this, ru.zf.pravka.trigger.FoodQuickActivity::class.java)
+                .putExtra(ru.zf.pravka.trigger.FoodQuickActivity.EXTRA_WHAT, what)
+        )
+        return true
+    }
+
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (foodToQuick(intent)) return
         tabOf(intent)?.let { tabRequest.value = it }
         groupOf(intent)?.let { groupRequest.value = it }
         intent.getStringExtra(EXTRA_FOOD_ACTION)?.takeIf { it.isNotBlank() }?.let {
@@ -279,6 +299,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Еда снимком без приложения на экране: окно Правки под камерой не нужно.
+        if (savedInstanceState == null && foodToQuick(intent)) {
+            finish()
+            return
+        }
         val app = application as PravkaApp
         val foodAction = intent?.getStringExtra(EXTRA_FOOD_ACTION).orEmpty()
         // Без явной просьбы открываем таймшит: это экран, который он смотрит
@@ -1088,7 +1113,8 @@ private fun MainScreen(
                     androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(200))
             },
             // Внутри карусели смена вкладки — не смена экрана: едет пейджер.
-            contentKey = { (w, p, t) -> w?.let { "web:" + it.url } ?: p?.toString() ?: if (t in ring) "ring" else t.name },
+            // Вкладок больше нет (22.10.2026): любая вкладка — тот же дом, смена вкладки экран не пересоздаёт.
+            contentKey = { (w, p, _) -> w?.let { "web:" + it.url } ?: p?.toString() ?: "home" },
             label = "screen",
         ) { (w, p, t) ->
             // Карусель — своим маршрутом на каждую страницу пейджера (ниже), остальное — здесь.
@@ -1110,12 +1136,14 @@ private fun MainScreen(
                         onDictationExport = { dictationExport = it },
                         onLifeExport = { lifeExport = true },
                     )
-                    t in ring -> RingPager(ring, t, onSettle = { tab = it }) { rt ->
-                        DebugScreen(app, atOf(null, null, rt)) {
-                            if (rt == Tab.TODAY) TodayScreen(app, todayNav) else modeScreen(rt)
-                        }
-                    }
-                    else -> modeScreen(t)
+                    // Правка на диете (22.10.2026, владелец: «я всё равно ничем там не пользуюсь внутри приложения»):
+                    // своих экранов нет — дом это страница Дел сервера (/t), остальное — страницами из меню Ковчега,
+                    // настройки — «Телефон» в том же меню. Правка сервера видна на телефоне сразу, без сборки.
+                    else -> PravkaHome(
+                        app,
+                        onPhone = { web = null; pages = listOf(Page.Service(Tab.MORE)) },
+                        onLeave = { (webContext as? android.app.Activity)?.moveTaskToBack(true) },
+                    )
                 }
             }
         }
@@ -1150,6 +1178,34 @@ private fun MainScreen(
     }
 
     if (lifeExport) LifeExportDialog(app, onDismiss = { lifeExport = false })
+}
+
+/**
+ * Дом приложения (22.10.2026, Правка на диете): страница Дел сервера `/t` с шапкой Ковчега — из её меню открываются
+ * остальные страницы и «Телефон». Сервер не подключён — одна строка и дорога в «Телефон», где вставляется QR.
+ * «Назад» с главной страницы — свернуть приложение, а не закрыть: WebView остаётся тёплым.
+ */
+@Composable
+private fun PravkaHome(app: PravkaApp, onPhone: () -> Unit, onLeave: () -> Unit) {
+    val link by app.delaSync.link.collectAsState()
+    val base = link?.url
+    if (base != null) {
+        DelaWebTab(app, base = base, openTaskId = null, onOpenHandled = {}, onClose = onLeave)
+        return
+    }
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            "Правка показывает страницы домашнего сервера. Сервер Дел не подключён — подключи его в «Телефоне», " +
+                "кнопки на экране работают и без него.",
+            style = MaterialTheme.typography.bodyLarge,
+        )
+        androidx.compose.material3.TextButton(onClick = onPhone, modifier = Modifier.padding(top = 12.dp)) {
+            Text("Открыть «Телефон»")
+        }
+    }
 }
 
 /**
@@ -1382,14 +1438,9 @@ private fun KovchegMenuHost(
     val crm = onServer && ru.zf.pravka.core.Dela.crmOn(snap, me)
     val model = remember(nav, link, crm, current, news, live, svod) {
         val K = ru.zf.pravka.core.Kovcheg
-        val modes = buildSet {
-            if (live(Tab.SPORT)) add(K.SPORT)
-            if (live(Tab.FOOD)) add(K.FOOD)
-            if (live(Tab.TODOIST)) add(K.DELA)
-            if (live(Tab.MONEY)) add(K.MONEY)
-        }
         val menu = K.menuFrom(ru.zf.pravka.core.Svod.value(K.MENU_KEY)) ?: K.FACTORY
-        val built = K.build(menu, K.own(modes, crm), nav, link?.url, zasechka = live(Tab.ZASECHKA))
+        // Правка на диете (22.10.2026): своих экранов нет — меню целиком из страниц сервера.
+        val built = K.build(menu, emptyList(), nav, link?.url, zasechka = live(Tab.ZASECHKA), webScreens = true)
         ru.zf.pravka.ui.KovchegMenuModel(
             big = built.big,
             directions = built.directions,
@@ -1405,7 +1456,7 @@ private fun KovchegMenuHost(
                 is ru.zf.pravka.core.Kovcheg.Target.Screen -> onScreen(target.key)
                 is ru.zf.pravka.core.Kovcheg.Target.Web -> {
                     // Страница сервиса — внутри приложения с шапкой Ковчега (`ServiceWebScreen.kt`); название и значок — из пункта.
-                    val item = (model.directions + listOfNotNull(model.create)).flatMap { it.items }.firstOrNull { it.target == target }
+                    val item = (model.big + (model.directions + listOfNotNull(model.create)).flatMap { it.items }).firstOrNull { it.target == target }
                     onDismiss()
                     onWeb(ru.zf.pravka.core.ServicePage(item?.name ?: target.url, item?.icon ?: "globe", target.url))
                 }

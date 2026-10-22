@@ -79,6 +79,8 @@ class FoodEngine(
         rawText: String,
         photo: File? = null,
         source: String = "voice",
+        /** Когда сказано, если разбор догоняет фразу из очереди `PendingTakes`: приём встаёт на это время. */
+        at: Long = 0L,
     ): Result<Parsed> {
         val text = rawText.trim()
         if (text.isBlank() && photo == null) {
@@ -126,6 +128,7 @@ class FoodEngine(
                 photo = photoName,
                 costUsd = parse.costUsd,
                 model = parse.model,
+                at = at,
             )
         )
     }

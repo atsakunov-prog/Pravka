@@ -201,9 +201,10 @@ class ZasechkaWidget : AppWidgetProvider() {
             v.setOnClickPendingIntent(R.id.w_text_box, main(app, RC_TAB, MainActivity.TAB_ZASECHKA))
             v.setOnClickPendingIntent(R.id.w_min_box, main(app, RC_TAB, MainActivity.TAB_ZASECHKA))
             v.setOnClickPendingIntent(R.id.w_thought, quick(app, RC_THOUGHT, ZasechkaQuickActivity.W_THOUGHT))
-            v.setOnClickPendingIntent(R.id.w_photo, main(app, RC_PHOTO, MainActivity.TAB_FOOD, "photo"))
-            v.setOnClickPendingIntent(R.id.w_gallery, main(app, RC_GALLERY, MainActivity.TAB_FOOD, "gallery"))
-            v.setOnClickPendingIntent(R.id.w_text, main(app, RC_TEXT, MainActivity.TAB_FOOD, "text"))
+            // Еда — сразу камерой, выбором снимка или строкой кнопки «Е», без вкладки (22.10.2026).
+            v.setOnClickPendingIntent(R.id.w_photo, food(app, RC_PHOTO, FoodQuickActivity.W_PHOTO))
+            v.setOnClickPendingIntent(R.id.w_gallery, food(app, RC_GALLERY, FoodQuickActivity.W_GALLERY))
+            v.setOnClickPendingIntent(R.id.w_text, food(app, RC_TEXT, FoodQuickActivity.W_TEXT))
             v.setOnClickPendingIntent(R.id.w_today, main(app, RC_TODAY, MainActivity.TAB_TODAY))
             return v
         }
@@ -229,6 +230,16 @@ class ZasechkaWidget : AppWidgetProvider() {
                 Intent(context, ZasechkaQuickActivity::class.java)
                     .putExtra(ZasechkaQuickActivity.EXTRA_WHAT, what)
                     .putExtra(ZasechkaQuickActivity.EXTRA_ENTRY, entry)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+
+        private fun food(context: Context, code: Int, what: String): PendingIntent =
+            PendingIntent.getActivity(
+                context,
+                code,
+                Intent(context, FoodQuickActivity::class.java)
+                    .putExtra(FoodQuickActivity.EXTRA_WHAT, what)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )

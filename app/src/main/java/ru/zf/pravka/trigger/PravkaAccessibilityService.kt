@@ -368,9 +368,6 @@ class PravkaAccessibilityService : AccessibilityService() {
                 }
         }
         instance = this
-        // «Где мы»: делится этот телефон — слушаем чужой GPS и датчик
-        // движения (сами запросы — короткие вызовы системы, но не на главном).
-        scope.launch(Dispatchers.IO) { runCatching { app.where.attach() } }
         // A fresh "connected" after takes were mid-flight = the process died
         // and the system rebound the service. Makes crashes visible in the log.
         app.eventLog.add("service connected")
@@ -708,10 +705,8 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Fold: окна висят, флаги честные, а диска на экране нет) — сторож
         // смотрит в список окон системы и лечит то, что свои флаги не видят.
         overlayWatch = OverlayWatch(this).also { it.start() }
-        // Телефон в ленте (13.10.2026): взгляд на экран раз в минуту своим
-        // потоком — что за приложение и о чём оно. Тумблеры решают внутри.
-        screenPeek?.stop()
-        screenPeek = ScreenPeek(this).also { it.start() }
+        // Сказанное без связи (очередь `PendingTakes`, 22.10.2026): вернулась сеть — разобрать.
+        watchPendingNetwork()
     }
 
     // Main-thread lag sentinel. The fold black-screen class of bug is "the
@@ -3003,37 +2998,11 @@ class PravkaAccessibilityService : AccessibilityService() {
             // otherwise nag about. Fire-and-forget - the check reads current data.
             // Телефон по дням — слой Засечки; тренировки в ленту — и Спорт, и Засечка.
             if (zasechka) scope.launch { app.phoneSweeper.sweep() }
-            // Телефон в ленте: кончившиеся сидения от порога — Сонету и врезкой в ленту.
-            if (zasechka) scope.launch { app.phoneSit.tick() }
-            if (zasechka && sport) scope.launch { app.icuSweeper.sweep() }
-            // Ночной разбор: запустить назревший прогон или спросить статус
-            // батча. Сам себя дросселирует (раз в 10 минут), тику не мешает.
-            // Отметка тика — пульс для табло «что работает»: нет тика — стоят все.
-            app.lastNightTickMs = System.currentTimeMillis()
-            scope.launch {
-                runCatching { app.nightReview.tick() }
-                    .onFailure { app.nightLog.add("ночной разбор: тик упал: ${it.message}") }
-            }
-            // Недельная правка промпта — в ночь на субботу, тем же тиком.
-            scope.launch {
-                runCatching { app.promptTuner.tick() }
-                    .onFailure { app.nightLog.add("правка промпта: тик упал: ${it.message}") }
-            }
-            // Сравнение моделей само не стартует — тик только докручивает начатое кнопкой.
-            scope.launch {
-                runCatching { app.modelCompare.tick() }
-                    .onFailure { app.nightLog.add("сравнение: тик упал: ${it.message}") }
-            }
-            // Спорт и еда: свой кэш и своя недоставленная почта. Оба звонка
-            // сами себя дросселируют (30 минут у выгрузки, «уже уехало» у
-            // еды), так что пятиминутный тик может дёргать их сколько хочет.
-            if (sport) scope.launch {
-                runCatching { app.icuSportSync.refresh() }
-                // Приехало новое с часов — уведомление с вердиктом по его
-                // правилам и кнопками самочувствия. Замыкает петлю feel,
-                // которую иначе надо помнить самому.
-                runCatching { notifyArrivedWorkouts() }
-            }
+            // Сон и тренировки с часов — в ленту: свип сам ходит в intervals, Спорт на телефоне ему не нужен.
+            if (zasechka) scope.launch { app.icuSweeper.sweep() }
+            // Правка на диете (22.10.2026, владелец: «все эти ночные разборы, правила, «Где мы» — не работает»):
+            // телефон в ленте с Сонетом, ночной разбор, правка промпта, сравнение моделей и Спорт на телефоне
+            // (кэш intervals, уведомления после тренировки, план, подходы) тиком больше не ходят — Спорт живёт на компе.
             // Автопилот — Засечки, а не Спорта: раньше жил в той же корутине.
             if (zasechka && autoPilotOn) scope.launch {
                 runCatching { autoPilot.tick() }
@@ -3041,18 +3010,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 runCatching { calendarPilot.tick() }
             }
             if (food) scope.launch { runCatching { app.foodEngine.syncPending() } }
-            // Общие Деньги: обмен с семейным Drive — свои правки туда, чужие
-            // сюда. Без входа молчит; второй обмен поверх идущего не встаёт.
-            if (money) scope.launch { runCatching { app.moneyCloudSync.sync("тик") } }
-            // «Где мы»: своя точка по лестнице цены (лежит — раз в час по Wi-Fi,
-            // едет — раз в 5 минут, просили — свой GPS) и обмен с облаком семьи.
-            // Не делится — молчит; режима в профиле у карты нет — это согласие.
-            scope.launch(Dispatchers.IO) { runCatching { app.where.tick("тик") } }
-            // План: календарь intervals раз в сутки — звонок дросселируется сам.
-            if (sport) scope.launch { runCatching { app.planSync.refresh() } }
-            // Подходы: ждут активность от часов и уезжают, как только она
-            // появится. Свой дроссель на десять минут внутри.
-            if (sport) scope.launch { runCatching { app.strengthEngine.syncPending() } }
+            // Обмен Денег через облако семьи и «Где мы» сняты (22.10.2026): второго телефона нет, правда Денег — архив.
             // Дела на сервере: очередь операций — на сервер, новое — в копию
             // (докачивает то, что не ушло на 10-секундной тишине). На Todoist —
             // по-старому: закрылось дело из Todoist — в задачу уезжает время
@@ -3085,19 +3043,13 @@ class PravkaAccessibilityService : AccessibilityService() {
                     ) { line -> app.eventLog.add(line) }
                 }
             }
-            // Секунды на кнопке: раз в сутки ночью — вся история заново всеми
-            // способами счёта, остаётся лучший (core/PaceTune.kt). Журналы —
-            // мегабайты: только фоновый поток, итог — в журнал автоматов.
-            scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                runCatching { app.paceStore.tuneIfDue(app.historyLog) { line -> app.nightLog.add(line) } }
-            }
             // Та же копия — в семейный Google Drive, как только снята (по Wi-Fi).
             // Без входа в Google молчит; решение — чтение двух маленьких файлов.
             scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.cloudBackup.tick() } }
             // Обновления: сам решает, прошли ли сутки, сам тянет и сам говорит.
             scope.launch { runCatching { app.updates.tick() } }
-            // Связь с облаками: сама решает, пора ли (интервал в настройках), на IO.
-            scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.netProber.tick() } }
+            // Сказанное без связи (очередь `PendingTakes`): раз в пять минут — ещё попытка.
+            scope.launch { runCatching { drainPending("тик") } }
             // Архив на компе: всё, что не дошло раньше, и журналы Правки. Не
             // подключён — молчит; новое отправляется и без тика, через секунды.
             scope.launch(kotlinx.coroutines.Dispatchers.IO) { runCatching { app.archiveSync.tick() } }
@@ -3316,7 +3268,6 @@ class PravkaAccessibilityService : AccessibilityService() {
         instance = null
         if (lagSamplerOn) runCatching { lagSampler.shutdownNow() }
         runCatching { autoPilot.stop() }
-        runCatching { app.where.detach() }
         ripenessHandler.removeCallbacks(ripenessCheck)
         ripenessHandler.removeCallbacks(digestRunnable)
         ripenessHandler.removeCallbacks(disarmCapture)
@@ -3328,6 +3279,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         configHandler.removeCallbacks(configReport)
         overlayWatch?.stop()
         overlayWatch = null
+        runCatching { unwatchPendingNetwork() }
         screenPeek?.stop()
         screenPeek = null
         runCatching { headsetVoice.close() }

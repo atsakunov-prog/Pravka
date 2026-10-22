@@ -40,7 +40,76 @@ class ZasechkaEngine(
         val action: String = "new",       // new | insert | edit | delete | stop | none
         val previousTitle: String = "",   // edit: what the entry used to say
         val say: String = "",             // none: почему ничего не записано
+        /** Не разобрано из-за обрыва связи с Claude: разбор догонит очередь `PendingTakes` (22.10.2026). */
+        val offline: Boolean = false,
     )
+
+    // Прошлые дни для контекста: как владелец САМ называл свои дела и в
+    // какие категории их клал (в том числе после правок руками). Без этого
+    // одно и то же дело приезжает каждый день под новым именем, и неделя
+    // не складывается.
+    private suspend fun recentLines(now: Long): List<String> {
+        val dayStart = dayStartMs(now)
+        return store.forRange(dayStart - RECENT_DAYS * 86_400_000L, dayStart)
+            .filter { it.source != "gap" && it.source != "auto" && it.title.isNotBlank() }
+            .groupBy { "${it.title.trim().lowercase()}|${it.category.trim().lowercase()}" }
+            .values
+            .mapNotNull { group -> group.maxByOrNull { it.start }?.let { it to group.size } }
+            .sortedByDescending { (last, _) -> last.start }
+            .take(30)
+            .map { (last, times) ->
+                "- «${last.title}» [${last.category.ifBlank { "без категории" }}]" +
+                    (if (times > 1) " ×$times" else "")
+            }
+    }
+
+    /**
+     * Дописать разбор сырой записи, не трогая её время и соседей (22.10.2026, очередь `PendingTakes`). Запись легла
+     * сырой, потому что Claude был недоступен, и стоит на своём месте; разбор даёт ей только название, категорию,
+     * клиента и пользу. «Сейчас» модели — время самой записи: фраза сказана тогда, а не в минуту повтора.
+     * Запись правили руками (категория уже есть) или её нет — не трогаем: слово владельца сильнее.
+     */
+    suspend fun label(entryId: Long): Outcome {
+        val entry = store.entryById(entryId)
+            ?: return Outcome(fakeEntry(System.currentTimeMillis(), ""), categorized = false, error = "записи в ленте уже нет", action = "none")
+        if (entry.category.isNotBlank()) return Outcome(entry, categorized = true, error = null, action = "none")
+        val text = entry.raw.trim().ifBlank { entry.title }
+        val categories = store.categories()
+        val categoryNames = categories.map { it.name }
+        val clients = store.clients()
+        val parsed = claude.zasechka(
+            raw = text,
+            categories = categories.map { it.name to it.hint },
+            clients = clients,
+            nowLocal = nowFormat.format(Date(entry.start)),
+            previousTitle = "",
+            todayEntries = emptyList(),
+            recentEntries = recentLines(entry.start),
+            ownerRules = runCatching { rules.enabledBlock() }.getOrDefault(""),
+        )
+        return parsed.fold(
+            onSuccess = { p ->
+                stats.recordAux(p.costUsd, p.tokensIn, p.tokensOut, route = ru.zf.pravka.data.ModelRoute.ZASECHKA.key)
+                val labeled = entry.copy(
+                    title = p.title.ifBlank { entry.title },
+                    category = categoryNames.firstOrNull { it.equals(p.category, ignoreCase = true) } ?: p.category,
+                    client = ZasechkaClient.keep(
+                        p.category,
+                        clients.firstOrNull { it.equals(p.client, ignoreCase = true) } ?: p.client,
+                        text,
+                    ),
+                    useful = p.useful,
+                )
+                store.update(labeled)
+                eventLog.add("засечка: разбор догнал «${entry.title}» → «${labeled.title}» [${labeled.category.ifBlank { "без категории" }}]")
+                Outcome(labeled, categorized = true, error = null, action = "edit", previousTitle = entry.title)
+            },
+            onFailure = { e ->
+                stats.recordError()
+                Outcome(entry, categorized = false, error = e.message, action = "none", offline = ru.zf.pravka.data.PendingTakes.isNetwork(e))
+            },
+        )
+    }
 
     // "четверг, 21 августа, 14:32" - the model needs the weekday and clock to
     // resolve "с 13:00" and "последние полчаса" into an offset.
@@ -94,22 +163,7 @@ class ZasechkaEngine(
                 "${e.category.ifBlank { "без категории" }} · ${e.title.ifBlank { "(без названия)" }}"
         }
 
-        // Прошлые дни для контекста: как владелец САМ называл свои дела и в
-        // какие категории их клал (в том числе после правок руками). Без этого
-        // одно и то же дело приезжает каждый день под новым именем, и неделя
-        // не складывается.
-        val dayStart = dayStartMs(now)
-        val recentLines = store.forRange(dayStart - RECENT_DAYS * 86_400_000L, dayStart)
-            .filter { it.source != "gap" && it.source != "auto" && it.title.isNotBlank() }
-            .groupBy { "${it.title.trim().lowercase()}|${it.category.trim().lowercase()}" }
-            .values
-            .mapNotNull { group -> group.maxByOrNull { it.start }?.let { it to group.size } }
-            .sortedByDescending { (last, _) -> last.start }
-            .take(30)
-            .map { (last, times) ->
-                "- «${last.title}» [${last.category.ifBlank { "без категории" }}]" +
-                    (if (times > 1) " ×$times" else "")
-            }
+        val recentLines = recentLines(now)
 
         val parsed = claude.zasechka(
             raw = text,
@@ -319,6 +373,13 @@ class ZasechkaEngine(
             },
             onFailure = { e ->
                 stats.recordError()
+                val offline = ru.zf.pravka.data.PendingTakes.isNetwork(e)
+                // Поправка к записи (редактор или очередь `PendingTakes`): поправка без модели — не новое дело, лента
+                // остаётся как была. Раньше здесь вставала ещё одна сырая запись со словами поправки.
+                if (editTarget != null) {
+                    eventLog.add("засечка: поправка к «${editTarget.title}» не разобралась (${e.message}) — лента как была")
+                    return Outcome(editTarget, categorized = false, error = e.message, action = "none", offline = offline)
+                }
                 // Saved raw and unsorted - data first, categories later.
                 val entry = store.startEntry(
                     start = now,
@@ -330,7 +391,7 @@ class ZasechkaEngine(
                     source = source,
                 )
                 eventLog.add("засечка: разбор не удался (${e.message}) — записано сырым")
-                Outcome(entry, categorized = false, error = e.message)
+                Outcome(entry, categorized = false, error = e.message, offline = offline)
             },
         )
     }

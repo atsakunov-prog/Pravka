@@ -193,8 +193,13 @@ private fun PravkaAccessibilityService.zasechkaFood(text: String, spoken: Boolea
                 Result.failure(e)
             }
         val meal = parsed.getOrElse { e ->
-            runCatching { app.strengthStore.addRaw(text, "food") }
             zButton?.setBusy(false)
+            // Нет связи с Claude — фраза ждёт в очереди и сама станет приёмом своего времени (22.10.2026).
+            if (queueOffline(ru.zf.pravka.data.PendingTakes.Kind.FOOD, text, e)) {
+                if (spoken) say("нет связи, еду запишу позже")
+                return@launch
+            }
+            runCatching { app.strengthStore.addRaw(text, "food") }
             Haptics.error(this@zasechkaFood)
             zButton?.showNote(
                 "🍽 Еду не разобрал: ${e.message ?: "без причины"}\nсказанное сохранено",

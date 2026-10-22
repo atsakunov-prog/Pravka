@@ -74,8 +74,11 @@ class MoneyEngine(
 
     // ---- Голос ----
 
-    /** Наговор → черновики. Возвращает номер тейка: по нему плашка показывает разобранное. */
-    suspend fun dictate(rawTranscript: String): Result<Long> {
+    /**
+     * Наговор → черновики. Возвращает номер тейка: по нему плашка показывает разобранное. [at] — когда сказано, если
+     * разбор догоняет наговор из очереди `PendingTakes`: «сегодня» и время траты — того дня, а не дня повтора.
+     */
+    suspend fun dictate(rawTranscript: String, at: Long = 0L): Result<Long> {
         val transcript = rawTranscript.trim()
         if (transcript.isBlank()) return Result.failure(IllegalArgumentException("Пустой наговор"))
         val state = store.load()
@@ -86,22 +89,26 @@ class MoneyEngine(
             payeesBlock = MoneyRules.toText(state.rules + factory()),
         ).getOrElse { e ->
             eventLog.add("деньги: разбор не вышел — ${e.message}")
-            // Сырой наговор не теряется и без разбора: он в журнале тейков.
-            store.addTake(MoneyStore.Take(System.currentTimeMillis(), transcript), emptyList())
+            // Сырой наговор не теряется и без разбора: он в журнале тейков. Обрыв связи — не сюда: наговор ждёт в
+            // очереди `PendingTakes` и придёт сюда же разобранным, второй пустой тейк был бы дублем.
+            if (!ru.zf.pravka.data.PendingTakes.isNetwork(e)) {
+                store.addTake(MoneyStore.Take(System.currentTimeMillis(), transcript), emptyList())
+            }
             return Result.failure(e)
         }
         runCatching { dictionaryStore.incrementHits(prepared.firedIds) }
         runCatching { stats.recordAux(parse.costUsd, parse.tokensIn, parse.tokensOut, route = ModelRoute.MONEY.key) }
-        val takeId = System.currentTimeMillis()
+        val takeId = if (at > 0L) at else System.currentTimeMillis()
+        val saidDay = if (at > 0L) java.time.Instant.ofEpochMilli(at).atZone(BankStatements.MSK).toLocalDate() else today()
         // Курсы ЦБ — заранее, по одному запросу на день: `toDrafts` синхронный.
         val needed = parse.items.filter { it.currency.uppercase() !in setOf("RUB", "RUR", "") }
-            .map { runCatching { LocalDate.parse(it.date) }.getOrNull() ?: today() }.toSet()
+            .map { runCatching { LocalDate.parse(it.date) }.getOrNull() ?: saidDay }.toSet()
         val byDay = needed.associateWith { rates.on(it) }
         val drafts = MoneyVoice.toDrafts(
             items = parse.items,
             takeId = takeId,
             owner = owner(),
-            today = today(),
+            today = saidDay,
             noonTs = ::noon,
             takeTs = takeId,
             rates = { cur, day -> byDay[day]?.get(cur.uppercase()) },
