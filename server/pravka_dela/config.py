@@ -77,6 +77,8 @@ class Config:
     brand_icon: str = ""
     # Режим отладки со страниц служб Ковчега: откуда окно-приёмник берёт записки (parse_debug_from). Пусто — заводское.
     debug_from: tuple[str, ...] = ()
+    # Один вход на все сервисы Ковчега (22.10.2026, family.py): соль и ключ куки владельца. Нет файла — вход как раньше.
+    family_file: Path = Path(r"C:\ProgramData\ZF-Dela\secrets\family.json")
 
     @property
     def app_role(self) -> str:
@@ -115,4 +117,5 @@ def load(env_file: str | None = None) -> Config:
         nav=parse_nav(get("DELA_NAV")),
         brand_icon=get("DELA_BRAND_ICON"),
         debug_from=parse_debug_from(get("DELA_DEBUG_FROM")),
+        family_file=Path(get("DELA_FAMILY_FILE") or str(Path(get("DELA_DATA", r"C:\ProgramData\ZF-Dela")) / "secrets" / "family.json")),
     )

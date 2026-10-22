@@ -53,7 +53,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from . import ask, db, debug, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
+from . import ask, db, debug, family, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
 from . import guard as claude_guard  # защита от петли (аудит №12); имя guard у API — обёртка маршрутов
 from .config import Config
 
@@ -241,11 +241,16 @@ def build(cfg: Config) -> Starlette:
         if header.lower().startswith("bearer "):
             return await anyio.to_thread.run_sync(tokens.who, url, header[7:].strip())
         cookie = request.cookies.get(COOKIE, "")
-        if not cookie:
+        owner_cookie = request.cookies.get(family.OWNER_COOKIE, "")
+        if not cookie and not owner_cookie:
             return None
         if request.method not in ("GET", "HEAD") and request.headers.get("x-dela") != "1":
             return None  # кука без нашего заголовка — запрос не с нашей страницы
-        return await anyio.to_thread.run_sync(tokens.session_who, url, cookie)
+        who = await anyio.to_thread.run_sync(tokens.session_who, url, cookie) if cookie else None
+        # Кука владельца с общего домена Ковчега (один вход на все сервисы, 22.10.2026, family.py).
+        if not who and owner_cookie and family.owner_valid(cfg.family_file, request.cookies):
+            who = await anyio.to_thread.run_sync(tokens.owner_who, url)
+        return who
 
     def guard(path: str, endpoint):
         """Белый список путей узких токенов (SCOPED_PATHS) — одна проверка на все /api/-маршруты, а не строка в каждом
@@ -280,16 +285,34 @@ def build(cfg: Config) -> Starlette:
         if request.headers.get("x-dela") != "1":
             return _err("нет заголовка", 400)
         try:
-            code = (await request.json()).get("code", "")
+            body = await request.json()
         except ValueError:
             return _err("ожидается JSON", 400)
-        got = await anyio.to_thread.run_sync(tokens.redeem, url, code, request.headers.get("user-agent", ""))
+        body = body if isinstance(body, dict) else {}
+        agent = request.headers.get("user-agent", "")
+        owner_key = None
+        if body.get("password") is not None:
+            # Вход владельца паролем Ковчега (22.10.2026, family.py): тот же пароль, что у остальных сервисов.
+            if not family.configured(cfg.family_file):
+                return _err("вход паролем ещё не настроен — нужен скрипт паролей на компе", 403)
+            wait = family.blocked_min()
+            if wait:
+                return _err(f"слишком много неверных паролей — вход закрыт ещё на {wait} мин", 429)
+            owner_key = await anyio.to_thread.run_sync(family.owner_key, cfg.family_file, str(body.get("password") or ""))
+            if not owner_key:
+                return _err("неверный пароль", 401)
+            got = await anyio.to_thread.run_sync(tokens.owner_session, url, agent)
+        else:
+            got = await anyio.to_thread.run_sync(tokens.redeem, url, str(body.get("code") or ""), agent)
         if not got:
             return _err("ссылка уже использована или устарела — попроси новую", 403)
         token, user = got
         resp = _json({"ok": True, "user": user})
         resp.set_cookie(COOKIE, token, max_age=tokens.SESSION_DAYS * 86400, httponly=True,
                         secure=secure_cookie, samesite="strict", path="/")
+        domain = family.domain_of(cfg.public_url)
+        if owner_key and domain:
+            resp.headers.append("set-cookie", family.set_cookie(owner_key, domain))
         return resp
 
     async def logout(request: Request):
@@ -298,6 +321,11 @@ def build(cfg: Config) -> Starlette:
             await anyio.to_thread.run_sync(tokens.logout, url, cookie)
         resp = _json({"ok": True})
         resp.delete_cookie(COOKIE, path="/")
+        # Выход — и из общего входа Ковчега: иначе кука владельца тут же впустила бы снова.
+        domain = family.domain_of(cfg.public_url)
+        if domain and request.headers.get("x-dela") == "1":
+            for c in family.clear_cookies(domain):
+                resp.headers.append("set-cookie", c)
         return resp
 
     async def me(request: Request):

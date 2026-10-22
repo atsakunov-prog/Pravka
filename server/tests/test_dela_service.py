@@ -235,6 +235,45 @@ def test_todo_page_and_its_offline_worker(dela):
     assert client.get("/static/todo-sw.js").status_code == 404
 
 
+def test_web_owner_password_and_kovcheg_cookie(dela, tmp_path, monkeypatch):
+    """Вход владельца паролем Ковчега и общей кукой домена (22.10.2026, family.py): «попроси ссылку у Саши» — не ему."""
+    import hashlib
+
+    from pravka_dela import family
+
+    monkeypatch.setattr(family, "_fails", [])
+    monkeypatch.setattr(family, "_blocked_until", 0.0)
+    salt = "00112233445566778899aabbccddeeff"
+
+    def key(p):
+        return hashlib.pbkdf2_hmac("sha256", p.encode(), bytes.fromhex(salt), family.ITERATIONS).hex()
+
+    conf = tmp_path / "family.json"
+    conf.write_text(json.dumps({"salt": salt, "owner": hashlib.sha256(key("пароль-владельца").encode()).hexdigest(),
+                                "family": hashlib.sha256(key("пароль-семьи").encode()).hexdigest()}), encoding="utf-8")
+    cfg = Config(db_url=dela, public_url="https://dela.example.org", family_file=conf)
+    web = "https://dela.example.org"
+    client = TestClient(api.build(cfg), base_url=web)
+    assert client.post("/auth/redeem", json={"password": "пароль-семьи"}, headers={"X-Dela": "1"}).status_code == 401
+    r = client.post("/auth/redeem", json={"password": "пароль-владельца"}, headers={"X-Dela": "1"})
+    owner = r.json()["user"]
+    assert r.status_code == 200 and owner
+    assert any(c.startswith("kv_owner=") and "Domain=example.org" in c for c in r.headers.get_list("set-cookie"))
+    assert client.get("/api/me").json()["user"] == owner
+    # Другой браузер: своей сессии Дел нет, только кука домена — тоже владелец, но запись — лишь с нашим заголовком.
+    other = TestClient(api.build(cfg), base_url=web)
+    other.cookies.set("kv_owner", key("пароль-владельца"), domain="dela.example.org")
+    assert other.get("/api/me").json()["user"] == owner
+    assert other.post("/api/ops", json={"ops": []}).status_code == 401
+    # Чужой ключ и семейная кука Дела не открывают.
+    stranger = TestClient(api.build(cfg), base_url=web)
+    stranger.cookies.set("kv_owner", "x" * 64, domain="dela.example.org")
+    assert stranger.get("/api/me").status_code == 401
+    fam = TestClient(api.build(cfg), base_url=web)
+    fam.cookies.set("kv_family", key("пароль-семьи"), domain="dela.example.org")
+    assert fam.get("/api/me").status_code == 401
+
+
 def test_web_invite_cookie_and_forgery_guard(dela):
     client = TestClient(api.build(Config(db_url=dela, public_url="http://test")))
     assert "Дела" in client.get("/").text and client.get("/static/app.js").status_code == 200

@@ -59,12 +59,13 @@ def revoke(url: str, name: str) -> int:
 
 
 # ── Веб: приглашения и сессии ────────────────────────────────────────────
-# Паролей нет. Вход — одноразовой ссылкой-приглашением (её выдаёт владелец:
-# команда invite или Claude) или подтверждением в боте (следующая фаза).
-# Ссылка живёт двое суток и работает один раз; сессия — полгода.
+# Команда входит одноразовой ссылкой-приглашением (её выдаёт владелец: команда
+# invite или Claude); ссылка живёт двое суток и работает один раз. Владелец с
+# 22.10.2026 — ещё и своим паролем Ковчега или общей кукой домена (family.py).
+# Сессия — годы: «попроси ссылку у Саши» самому Саше больше не показывается.
 
 INVITE_TTL_H = 48
-SESSION_DAYS = 180
+SESSION_DAYS = 3650
 
 
 def invite(url: str, user: str) -> str:
@@ -108,6 +109,36 @@ def session_who(url: str, token: str) -> Who | None:
             (_hash(token),),
         ).fetchone()
     return Who(row["user_id"], "web", "веб") if row else None
+
+
+def owner_session(url: str, user_agent: str = "") -> tuple[str, str] | None:
+    """Сессия веба владельцу — вход его паролем (family.py, 22.10.2026). Возвращает (токен, пользователь)."""
+    token = secrets.token_urlsafe(32)
+    with db.session(url, "system", "svc:auth") as conn:
+        row = conn.execute("SELECT crm.owner_id() AS id").fetchone()
+        if not row or not row["id"]:
+            return None
+        conn.execute(
+            "INSERT INTO crm.sessions (token_hash, user_id, expires_at, user_agent) "
+            "VALUES (%s, %s, now() + make_interval(days => %s), %s)",
+            (_hash(token), row["id"], SESSION_DAYS, user_agent[:200]),
+        )
+    return token, row["id"]
+
+
+_owner_cache: dict[str, str] = {}
+
+
+def owner_who(url: str) -> Who | None:
+    """Владелец — для куки владельца с общего домена (family.py): своей сессии в базе у неё нет."""
+    owner = _owner_cache.get(url)
+    if not owner:
+        with db.session(url, "system", "svc:auth") as conn:
+            row = conn.execute("SELECT crm.owner_id() AS id").fetchone()
+        owner = (row or {}).get("id") or ""
+        if owner:
+            _owner_cache[url] = owner
+    return Who(owner, "web", "веб") if owner else None
 
 
 def logout(url: str, token: str) -> None:

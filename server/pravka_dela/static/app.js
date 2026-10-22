@@ -1177,10 +1177,29 @@ const go = (hash) => { location.hash = hash; };
 window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.pick.project = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
 
 // ── Вход ────────────────────────────────────────────────────────────────
+// Владелец — паролем Ковчега, тем же, что у остальных сервисов (22.10.2026: «попроси ссылку у Саши» самому Саше
+// больше не показывается); команда — ссылкой-приглашением, как раньше. Ответ на пароль — своим fetch, не api():
+// у api() 401 значит «нет входа» и перерисовывает страницу, а здесь 401 — «неверный пароль», его надо показать.
 function renderLogin(msg) {
   S.top = null;
+  const pw = el('input', { type: 'password', class: 'login-pw', placeholder: 'Пароль', autocomplete: 'current-password' });
+  const note = el('p', { class: 'muted' }, msg || 'Пароль — тот же, что у остальных сервисов Ковчега. Команда входит по ссылке-приглашению.');
+  const go = async () => {
+    if (!pw.value) return;
+    note.textContent = 'Проверяю…';
+    try {
+      const r = await fetch('/auth/redeem', { method: 'POST', credentials: 'same-origin', headers: { 'X-Dela': '1', 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pw.value }) });
+      let d = {};
+      try { d = await r.json(); } catch (e) { /* пусто */ }
+      if (!r.ok || d.ok === false) { note.textContent = d.error || 'ошибка ' + r.status; pw.select(); return; }
+      // Пришли со страницы /t (она шлёт сюда без входа) — туда и обратно.
+      location.replace(new URLSearchParams(location.search).get('next') === 't' ? '/t' : '/');
+    } catch (e) { note.textContent = 'нет связи: ' + e.message; }
+  };
+  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   $app.replaceChildren(el('div', { class: 'login' }, el('img', { class: 'login-logo', src: '/static/icon.svg', alt: '' }), el('h1', {}, 'Дела'),
-    el('p', { class: 'muted' }, msg || 'Вход — по ссылке-приглашению. Попроси её у Саши: ссылка одноразовая, дальше страница помнит вход полгода.')));
+    pw, el('button', { class: 'btn primary', onclick: go }, 'Войти'), note));
+  pw.focus();
 }
 
 async function boot() {
