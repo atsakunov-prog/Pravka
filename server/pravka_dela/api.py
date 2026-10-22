@@ -302,6 +302,8 @@ def build(cfg: Config) -> Starlette:
             if not owner_key:
                 return _err("неверный пароль", 401)
             got = await anyio.to_thread.run_sync(tokens.owner_session, url, agent)
+            if got:
+                await anyio.to_thread.run_sync(family.note_login, cfg.logins_file, agent)
         else:
             got = await anyio.to_thread.run_sync(tokens.redeem, url, str(body.get("code") or ""), agent)
         if not got:

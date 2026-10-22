@@ -79,6 +79,9 @@ class Config:
     debug_from: tuple[str, ...] = ()
     # Один вход на все сервисы Ковчега (22.10.2026, family.py): соль и ключ куки владельца. Нет файла — вход как раньше.
     family_file: Path = Path(r"C:\ProgramData\ZF-Dela\secrets\family.json")
+    # Журнал входов паролем (logins.jsonl): сборщик «Дома» на компе шлёт каждую строку владельцу в Telegram. Лежит в
+    # журналах службы — в папку секретов у неё права только на чтение. None — не писать (тесты).
+    logins_file: Path | None = None
 
     @property
     def app_role(self) -> str:
@@ -118,4 +121,5 @@ def load(env_file: str | None = None) -> Config:
         brand_icon=get("DELA_BRAND_ICON"),
         debug_from=parse_debug_from(get("DELA_DEBUG_FROM")),
         family_file=Path(get("DELA_FAMILY_FILE") or str(Path(get("DELA_DATA", r"C:\ProgramData\ZF-Dela")) / "secrets" / "family.json")),
+        logins_file=Path(get("DELA_LOGINS_FILE") or str(Path(get("DELA_LOGS", r"C:\Bot\ZFbot\logs\dela")) / "logins.jsonl")),
     )

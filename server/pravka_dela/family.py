@@ -72,6 +72,19 @@ def owner_key(path: Path, password: str) -> str | None:
     return None
 
 
+def note_login(journal: Path | None, user_agent: str) -> None:
+    """Вход паролем — строка в журнал входов: сборщик «Дома» шлёт её владельцу в Telegram («🔐 Вход», чужой вход
+    видно сразу). Адреса нет: снаружи все приходят от роутера. Не записалось — вход всё равно состоялся."""
+    if not journal:
+        return
+    line = json.dumps({"at": time.time(), "scope": OWNER_COOKIE, "ua": (user_agent or "")[:300]}, ensure_ascii=False)
+    try:
+        with open(journal, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+
+
 def blocked_min() -> int:
     """Сколько ещё минут вход паролем закрыт (0 — открыт)."""
     with _lock:

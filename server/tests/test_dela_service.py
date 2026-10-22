@@ -251,11 +251,15 @@ def test_web_owner_password_and_kovcheg_cookie(dela, tmp_path, monkeypatch):
     conf = tmp_path / "family.json"
     conf.write_text(json.dumps({"salt": salt, "owner": hashlib.sha256(key("пароль-владельца").encode()).hexdigest(),
                                 "family": hashlib.sha256(key("пароль-семьи").encode()).hexdigest()}), encoding="utf-8")
-    cfg = Config(db_url=dela, public_url="https://dela.example.org", family_file=conf)
+    journal = tmp_path / "logins.jsonl"
+    cfg = Config(db_url=dela, public_url="https://dela.example.org", family_file=conf, logins_file=journal)
     web = "https://dela.example.org"
     client = TestClient(api.build(cfg), base_url=web)
     assert client.post("/auth/redeem", json={"password": "пароль-семьи"}, headers={"X-Dela": "1"}).status_code == 401
-    r = client.post("/auth/redeem", json={"password": "пароль-владельца"}, headers={"X-Dela": "1"})
+    assert not journal.exists()  # неверный пароль в журнал входов не пишется
+    r = client.post("/auth/redeem", json={"password": "пароль-владельца"}, headers={"X-Dela": "1", "User-Agent": "Pixel Chrome"})
+    seen = [json.loads(ln) for ln in journal.read_text(encoding="utf-8").splitlines()]
+    assert [(e["scope"], e["ua"]) for e in seen] == [("kv_owner", "Pixel Chrome")]  # сборщик «Дома» шлёт его в Telegram
     owner = r.json()["user"]
     assert r.status_code == 200 and owner
     assert any(c.startswith("kv_owner=") and "Domain=example.org" in c for c in r.headers.get_list("set-cookie"))
