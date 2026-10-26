@@ -105,6 +105,15 @@ class DelaSync(
      */
     @Volatile var onZasechka: (suspend (JSONArray) -> Unit)? = null
 
+    /**
+     * Лента Засечки на сервере (26.10.2026, `ZasechkaServer`): версия ленты, которую телефон уже взял, — в запрос синка
+     * (`&zas=`), чтобы окно ленты ехало, только когда она сменилась; null — лента ещё здесь (параметра нет).
+     */
+    @Volatile var zasRev: (() -> Long?)? = null
+
+    /** Ответы сервера на отправленные операции — тому, кто ждёт своих (лента Засечки: передача и окно после правки). */
+    @Volatile var onAck: (suspend (List<JSONObject>, JSONArray) -> Unit)? = null
+
     private val iconFile: File get() = File(DataRoot.secrets(context), ICON_FILE)
     private val _brandIcon = MutableStateFlow(readIcon())
 
@@ -272,6 +281,7 @@ class DelaSync(
             val results = reply.optJSONArray("results") ?: throw DelaException("Дела ответили без results: ${reply.toString().take(200)}")
             val acked = store.ack(results)
             svod?.ack(chunk.map { it.op }, results)
+            onAck?.let { f -> runCatching { f(chunk.map { it.op }, results) }.onFailure { e -> log("дела: ответ на отправленное — ${why(e)}") } }
             log("дела: отправлено ${chunk.size}, ответ на $acked")
             // Сервер ответил не на всё — повторять тот же кусок по кругу незачем:
             // неотвеченное уйдёт следующим проходом.
@@ -281,7 +291,8 @@ class DelaSync(
 
     private suspend fun pull(l: Link) {
         val since = store.seq()
-        val resp = get(l.url, l.token, "api/sync?since=$since")
+        val zas = zasRev?.invoke()?.let { "&zas=$it" }.orEmpty()
+        val resp = get(l.url, l.token, "api/sync?since=$since$zas")
         val digestWas = store.digest.value
         val refused = store.applySync(resp, System.currentTimeMillis())
         if (refused.isNotBlank()) throw DelaException(refused)

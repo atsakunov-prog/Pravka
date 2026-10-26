@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
 from pravka_dela import db as dela_db
@@ -122,7 +124,10 @@ def test_new_content_goes_back_to_naming_but_locks_stay(mt):
 
 def test_naming_resolves_client_people_and_leaves_strangers_as_guests(mt):
     url = mt["url"]
-    m = push(url)
+    # Вопрос разбора живёт только у свежей встречи (QUESTION_DAYS): дата от «сейчас», а не прибитая — 26.10 тест с
+    # встречей 12.10 сам себя завалил.
+    now = dt.datetime.now(dt.timezone.utc)
+    m = push(url, started_at=(now - dt.timedelta(hours=2)).isoformat(), ended_at=(now - dt.timedelta(hours=1)).isoformat())
     with dela_db.session(url, "sasha", "svc:test") as c:
         row = c.execute("SELECT * FROM crm.meetings WHERE id = %s", (m["id"],)).fetchone()
         meetings.apply_names(c, row, {

@@ -363,7 +363,8 @@ def build(cfg: Config) -> Starlette:
             since = int(request.query_params.get("since", "0"))
         except ValueError:
             return _err("since — целое число", 400)
-        out = await anyio.to_thread.run_sync(store.sync, url, who.user, since)
+        zas_rev = request.query_params.get("zas")  # версия ленты Засечки у телефона (dela_0038)
+        out = await anyio.to_thread.run_sync(store.sync, url, who.user, since, zas_rev)
         return _json({"ok": True, **out})
 
     async def ops(request: Request):
@@ -390,7 +391,7 @@ def build(cfg: Config) -> Starlette:
                 return _err(f"службе {who.name} — только чтение {sc['svod_prefix']}*{extra}", 403)
             return _err(f"службе {who.name} можно только {', '.join(sorted(sc['ops']))} с ключами {sc['svod_prefix']}*", 403)
         # Команды Засечки (zasechka.py) — дело владельца с его веба и телефона, а не служб с его токеном (встречи, бот).
-        if who.kind == "service" and any(isinstance(o, dict) and str(o.get("op") or "").startswith("zasechka.") for o in items):
+        if who.kind == "service" and any(isinstance(o, dict) and str(o.get("op") or "").startswith(("zasechka.", "zas.")) for o in items):
             return _err(f"службе {who.name} команды Засечки не положены", 403)
         out = await anyio.to_thread.run_sync(lambda: store.apply_ops(url, who.user, items, who.via, who.actor))
         bad = [r for r in out["results"] if not r.get("ok")]

@@ -59,7 +59,7 @@ TWINS.pages.zasechka = (() => {
     }
     if (today) {
       kids.push(el('div', { class: 'tw-row tw-acts' },
-        e ? el('button', { class: 'btn small', disabled: stopWait, title: 'Остановить — команда телефону', onclick: () => T.command('stop', { entry_id: e.id }) },
+        e ? el('button', { class: 'btn small', disabled: stopWait, title: d.zas_mode === 'server' ? 'Остановить' : 'Остановить — команда телефону', onclick: () => T.command('stop', { entry_id: e.id }) },
           icon('stop', 15), stopWait ? 'Стоп ждёт телефона' : 'Стоп') : null,
         target ? el('button', { class: 'btn small', onclick: () => openEdit(target) }, icon('edit', 15), 'Поправить') : null));
       kids.push(el('div', { class: 'tw-eyebrow tw-mt' }, e ? 'Начать другое' : 'Начать'), startForm(d));
@@ -99,7 +99,7 @@ TWINS.pages.zasechka = (() => {
       el('input', { type: 'text', inputmode: 'numeric', placeholder: 'ЧЧ:ММ', maxlength: 5, value: val,
         oninput: (e) => set(e.target.value.trim()) }));
     return T.card('tw-edit o0',
-      T.sec('edit', 'Поправить', { small: `${x.was.start}–${x.open ? 'сейчас' : x.was.end} · уйдёт телефону, он поправит у себя` }),
+      T.sec('edit', 'Поправить', { small: `${x.was.start}–${x.open ? 'сейчас' : x.was.end}` + (T.onServer() ? '' : ' · уйдёт телефону, он поправит у себя') }),
       el('input', { class: 'tw-in', id: 'tw-edit-title', type: 'text', value: ui.editTitle, maxlength: 120, 'aria-label': 'Название', oninput: (e) => { ui.editTitle = e.target.value; },
         onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); send(); } if (e.key === 'Escape') { ui.edit = null; render(); } } }),
       el('div', { class: 'tw-form' }, catBtn(d, ui.editCat, (v) => { ui.editCat = v; }),

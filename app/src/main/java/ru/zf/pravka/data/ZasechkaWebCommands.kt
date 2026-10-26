@@ -85,6 +85,9 @@ internal class ZasechkaWebCommands(
 
     /** Поле `zasechka` синка Дел: команды по порядку нажатия. Ошибка одной не останавливает остальные. */
     suspend fun onSync(cmds: JSONArray) {
+        // Лента на сервере (26.10.2026, docs/server-truth.md): веб пишет в неё сам, команды телефону больше не нужны —
+        // не взятые до передачи сервер снял.
+        if (store.serverMode) return
         val list = ZasechkaWeb.parse(cmds)
         if (list.isEmpty()) return
         if (!enabled()) return

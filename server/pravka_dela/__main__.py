@@ -350,13 +350,29 @@ def cmd_serve(args) -> int:
                 log.exception("«Сейчас на завтра»")
             await asyncio.sleep(60)
 
+    async def zas_loop():
+        # Лента Засечки на сервере (dela_0038, zas.py): раз в минуту нормализовать на «сейчас» — живой заполнитель,
+        # полночь, карантин дыр; до передачи ленты с телефона — ничего (режим phone).
+        from . import db as ddb, zas
+
+        def once():
+            with ddb.session(cfg.db_url, "system", via="system") as conn:
+                return zas.tick(conn)
+
+        while True:
+            try:
+                await asyncio.to_thread(once)
+            except Exception:
+                log.exception("лента Засечки: нормализация")
+            await asyncio.sleep(60)
+
     async def main():
         server = uvicorn.Server(uvicorn.Config(
             api.build(cfg), host=cfg.listen_host, port=cfg.listen_port,
             log_level="info", log_config=None, proxy_headers=False, server_header=False,
         ))
         await asyncio.gather(server.serve(), chores(), krug_loop(), meetings_loop(), spend_loop(),
-                             capture_loop(), rules_loop())
+                             capture_loop(), rules_loop(), zas_loop())
 
     log.info("Дела: слушаю %s:%d", cfg.listen_host, cfg.listen_port)
     asyncio.run(main())

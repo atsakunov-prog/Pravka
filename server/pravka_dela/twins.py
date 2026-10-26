@@ -21,7 +21,7 @@ import datetime as dt
 import re
 from typing import Any
 
-from . import digest, life, sky, zasechka
+from . import digest, life, sky, zas, zasechka
 
 PAGES = ("day", "zasechka", "pravka")   # маршруты веба #/day, #/zasechka, #/pravka; в /api/me look.pages их объявляет kovcheg_ui.PAGES
 VIEWS = PAGES + ("pogoda",)            # виды страниц: службам с токеном владельца — 403 (api.view)
@@ -150,7 +150,8 @@ def view_day(conn, user: str, day=None, err=None, **_) -> dict:
         "SELECT id, title, started_at, duration_min, sphere FROM crm.meetings WHERE owner_id = %s AND archived_at IS NULL "
         "AND (started_at AT TIME ZONE 'Europe/Moscow')::date = %s ORDER BY started_at", (user, d)).fetchall()
     return {"day": d, "today": _today(conn), "now": _now(), **x, "tiles": _tiles(conn, user, d, x),
-            "digest": digest.last(conn, user), "meetings": meetings, "commands": zasechka.recent(conn, user)}
+            "digest": digest.last(conn, user), "meetings": meetings, "commands": zasechka.recent(conn, user),
+            "zas_mode": zas.mode(conn, user)}
 
 
 def view_zasechka(conn, user: str, day=None, err=None, **_) -> dict:
@@ -173,7 +174,8 @@ def view_zasechka(conn, user: str, day=None, err=None, **_) -> dict:
         except life.NoArchive as e:
             x["archive"] = {"ok": False, "error": str(e)}
     return {"day": d, "today": _today(conn), "now": _now(), **x, "tasks": tasks,
-            "commands": zasechka.recent(conn, user)}
+            "commands": zasechka.recent(conn, user),
+            "zas_mode": zas.mode(conn, user)}
 
 
 def view_pogoda(conn, user: str, err=None, **_) -> dict:

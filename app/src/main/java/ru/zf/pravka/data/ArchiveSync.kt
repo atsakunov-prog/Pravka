@@ -65,6 +65,12 @@ internal class ArchiveSync(
         val profile: String?
         val appVersion: String
         suspend fun units(domain: Domain, clock: ArchiveEvents.Clock): List<ArchiveEvents.Item>
+
+        /**
+         * Часть, которую в архив пишет сервер, а не телефон (26.10.2026, docs/server-truth.md: лента Засечки после передачи
+         * — правда сервера Дел, сутки в архив кладёт он сам). Её телефон не собирает и не сверяет — и удалений не шлёт.
+         */
+        fun serverOwned(domain: Domain): Boolean = false
     }
 
     enum class Domain(val kinds: List<String>) {
@@ -351,6 +357,7 @@ internal class ArchiveSync(
             val at = clock.iso(System.currentTimeMillis())
             val events = mutableListOf<Pending>()
             for (d in domains) {
+                if (sources.serverOwned(d)) continue
                 val units = runCatching { sources.units(d, clock) }.getOrElse { e ->
                     log("архив: ${d.name.lowercase()} не собрался — ${e.javaClass.simpleName}: ${e.message}")
                     continue

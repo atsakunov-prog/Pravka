@@ -1687,6 +1687,8 @@ object Dela {
         fun taskName(ref: String): String = s.task(ref)?.let { "«${it.title.take(60)}»" } ?: "дело"
         return when (op.str("op")) {
             "task.create" -> "новое дело «${op.optJSONObject("task")?.str("title").orEmpty().take(60)}»"
+            "zas.handover" -> "передача ленты Засечки серверу"
+            "zas.op" -> "правка ленты Засечки"
             "task.set" -> "правка: ${taskName(op.str("id"))}"
             "task.done" -> "закрыть ${taskName(op.str("id"))}"
             "task.reopen" -> "вернуть ${taskName(op.str("id"))}"

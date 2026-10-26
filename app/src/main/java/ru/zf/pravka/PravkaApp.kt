@@ -433,7 +433,21 @@ class PravkaApp : Application() {
                 if (profileStore.owner) ru.zf.pravka.data.ZasechkaStore.DEFAULT_CATEGORIES
                 else ru.zf.pravka.data.ZasechkaStore.neutralCategories()
             }
+            // Лента на сервере (26.10.2026): крючок очереди — с рождения ленты, а не с первого синка Дел: правка в
+            // режиме server, сделанная до него, иначе не дошла бы до сервера.
+            zasechkaServer.attach(store)
         }
+    }
+
+    /** Лента Засечки на сервере — проводка (26.10.2026, `data/ZasechkaServer.kt`, docs/server-truth.md). */
+    internal val zasechkaServer by lazy {
+        ru.zf.pravka.data.ZasechkaServer(
+            dela = delaStore,
+            poke = { delaSync.poke() },
+            device = { zasechkaWeb.device() },
+            enabled = { profileStore.has(ru.zf.pravka.data.Profile.Mode.ZASECHKA) },
+            log = { eventLog.add(it) },
+        )
     }
     val zasechkaEngine by lazy {
         ru.zf.pravka.core.ZasechkaEngine(
@@ -462,6 +476,8 @@ class PravkaApp : Application() {
         ).also { sync ->
             // Команды Засечки из веба (docs/zasechka.md «Команды из веба»): синк отдаёт их сюда.
             sync.onZasechka = { cmds -> zasechkaWeb.onSync(cmds) }
+            // Лента на сервере (26.10.2026): передача, окно ленты в синке и в ответах на правки.
+            zasechkaServer.install(sync)
             sync.listen { resp -> claudeSpend.onSync(resp) }
             // Режим отладки (15.10.2026): поле debug синка — рисовать ли строку «Что не так?» (DelaDebugSync).
             sync.listen { resp -> delaDebug.onSync(resp) }
@@ -765,6 +781,10 @@ class PravkaApp : Application() {
     private val archiveSources = object : ru.zf.pravka.data.ArchiveSync.Sources {
         override val profile: String? get() = profileStore.current?.id
         override val appVersion: String get() = BuildConfig.VERSION_NAME
+
+        // Лента Засечки, переданная серверу (zas.handover, 26.10.2026): сутки в архив кладёт сервер Дел сам.
+        override fun serverOwned(domain: ArchiveDomain): Boolean =
+            domain == ArchiveDomain.ZASECHKA && zasechkaStore.serverMode
 
         override suspend fun units(
             domain: ArchiveDomain,

@@ -161,6 +161,31 @@ class ZasechkaStore(private val context: Context) {
             return out to kept
         }
 
+        /** Запись — как её знает сервер (snake_case, server/contract/dela-zas.json «entry»). */
+        fun toServer(e: Entry): JSONObject = JSONObject()
+            .put("id", e.id).put("start", e.start).put("end", e.end).put("raw", e.raw).put("title", e.title)
+            .put("category", e.category).put("client", e.client).put("useful", e.useful).put("source", e.source)
+            .put("created_at", e.createdAt).put("pomodoros", e.pomodoros).put("comment", e.comment)
+            .put("task", e.task).put("project", e.project).put("person", e.person)
+
+        /** Запись с сервера; без номера или начала — null (кривую не кладём). */
+        fun fromServer(o: JSONObject): Entry? {
+            val id = o.optLong("id", 0)
+            val start = o.optLong("start", 0)
+            if (id <= 0 || start <= 0) return null
+            fun s(k: String) = if (o.isNull(k)) "" else o.optString(k, "")
+            return Entry(
+                id = id, start = start, end = o.optLong("end", 0), raw = s("raw"), title = s("title"),
+                category = s("category"), client = s("client"), useful = o.optInt("useful", 0),
+                source = s("source").ifBlank { "voice" }, createdAt = o.optLong("created_at", start),
+                pomodoros = o.optInt("pomodoros", 0), comment = s("comment"), task = s("task"),
+                project = s("project"), person = s("person"),
+            )
+        }
+
+        /** Как телефон видел запись до правки: кусок, которого сервер не знает под этим номером, найдётся по ним. */
+        fun was(e: Entry): JSONObject = JSONObject().put("start", e.start).put("title", e.title).put("source", e.source)
+
         fun neutralCategories(): List<Category> {
             val personal = setOf("Секс: с Марианной", "Секс: соло")
             val hints = mapOf(
@@ -253,6 +278,34 @@ class ZasechkaStore(private val context: Context) {
 
     /** Wired by PravkaApp: incidents and recoveries land in the event log. */
     var logger: ((String) -> Unit)? = null
+
+    // ── Лента на сервере (26.10.2026, docs/server-truth.md, контракт server/contract/dela-zas.json) ──
+    // После передачи (zas.handover) правда ленты — сервер Дел. Правка по-прежнему ложится здесь сразу — виджет,
+    // автопилот и работа без сети видят её мгновенно, — и тут же, под тем же замком, уходит операцией zas.op в очередь
+    // Дел: порядок операций — порядок правок. Ответ сервера и синк приносят окно ленты (двое суток и идущее), оно
+    // заменяет здесь своё ([applyServer]). Архив ленту от телефона больше не получает: сутки кладёт сервер.
+
+    /** Лента передана серверу: правда — там, здесь — её окно и правки, ещё не дошедшие до сервера. */
+    @Volatile var serverMode = false
+        private set
+
+    /** Версия ленты на сервере (lrev), которую телефон уже взял; -1 — не брал (синк привезёт окно). */
+    @Volatile var serverRev = -1L
+        private set
+
+    /** Куда класть операцию ленты — очередь Дел (ставит `ZasechkaServer`). Зовётся под замком ленты. */
+    @Volatile var remote: (suspend (kind: String, args: JSONObject) -> Unit)? = null
+
+    private suspend fun sendLocked(kind: String, args: JSONObject) {
+        if (!serverMode) return
+        val r = remote ?: run {
+            logger?.invoke("⚠️ лента: правка «$kind» не ушла на сервер — очередь Дел не подключена")
+            return
+        }
+        runCatching { r(kind, args) }.onFailure { e ->
+            logger?.invoke("лента: правка «$kind» не легла в очередь Дел — ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
 
     private val mutex = Mutex()
     private var loaded = false
@@ -355,6 +408,59 @@ class ZasechkaStore(private val context: Context) {
         persist()
     }
 
+    /**
+     * Передать ленту серверу Дел (zas.handover, 26.10.2026): вся лента, категории и клиенты — в [send] (очередь Дел), и
+     * с этого мига режим server. Под замком ленты: ни одна правка не встанет в очередь раньше передачи. Пустую ленту не
+     * передаём (это поломка, а не правка) — 0; уже передана — 0.
+     */
+    suspend fun handOver(send: suspend (JSONObject) -> Unit): Int = mutex.withLock {
+        ensureLoaded()
+        if (serverMode || entries.isEmpty()) return@withLock 0
+        val payload = JSONObject()
+            .put("entries", JSONArray().apply { entries.forEach { put(toServer(it)) } })
+            .put("categories", JSONArray().apply {
+                categories.forEach { c ->
+                    put(JSONObject().put("name", c.name).put("hint", c.hint).put("base_min", c.baseMin).put("value", c.value))
+                }
+            })
+            .put("clients", JSONArray(clients))
+        send(payload)
+        serverMode = true
+        serverRev = -1L
+        persistQueued()
+        logger?.invoke("лента: передана серверу — ${entries.size} записей; дальше правда ленты на сервере Дел")
+        entries.size
+    }
+
+    /** Сервер ленту не взял (пустая, кривая) — назад в режим phone: правда снова здесь, архив получает её как раньше. */
+    suspend fun leaveServer(why: String): Unit = mutex.withLock {
+        ensureLoaded()
+        if (!serverMode) return@withLock
+        serverMode = false
+        serverRev = -1L
+        persistQueued()
+        logger?.invoke("⚠️ лента: сервер не взял передачу — $why; правда ленты снова на телефоне")
+    }
+
+    /**
+     * Окно ленты с сервера (ответ операции или синк Дел): записи, идущая и всё, что кончилось или началось с [fromMs], —
+     * серверные; раньше — как были. Своё, ещё не отправленное, сюда не ложится — окно берут, только когда очередь
+     * ленты пуста (`ZasechkaServer`). Пустое окно при непустой ленте здесь — тоже правда: сервер вправе всё удалить.
+     * Лента переедет и тогда, когда передал другой телефон владельца: правда — у сервера.
+     */
+    suspend fun applyServer(window: List<Entry>, fromMs: Long, rev: Long): Unit = mutex.withLock {
+        ensureLoaded()
+        val keep = entries.filter { !it.open && it.end < fromMs && it.start < fromMs }
+        entries = (keep + window).sortedBy { it.start }.toMutableList()
+        lastId = maxOf(lastId, entries.maxOfOrNull { it.id } ?: 0L)
+        if (!serverMode) logger?.invoke("лента: на сервере уже есть лента владельца — телефон теперь её окно")
+        serverMode = true
+        serverRev = rev
+        // Откат прежних шагов вернул бы ленту, которой на сервере уже нет.
+        undoSteps.clear()
+        persist()
+    }
+
     /** The entry currently running, if any. */
     suspend fun openEntry(): Entry? = mutex.withLock {
         ensureLoaded()
@@ -431,6 +537,9 @@ class ZasechkaStore(private val context: Context) {
         normalizeLocked()
         entries.sortBy { it.start }
         persist()
+        sendLocked("start", JSONObject().put("start", start).put("raw", opened.raw).put("title", opened.title)
+            .put("category", opened.category).put("client", opened.client).put("useful", opened.useful)
+            .put("source", source).put("task", opened.task).put("project", opened.project).put("id", opened.id))
         // After the splice the running дело is the (only) open fragment.
         entries.lastOrNull { it.open } ?: opened
     }
@@ -802,6 +911,7 @@ class ZasechkaStore(private val context: Context) {
             // An overnight дело closes across midnight - split it per day.
             normalizeLocked()
             persist()
+            sendLocked("close", JSONObject().put("at", at))
         }
         closed
     }
@@ -903,6 +1013,10 @@ class ZasechkaStore(private val context: Context) {
         normalizeLocked()
         entries.sortBy { it.start }
         persist()
+        // Границы — как сказаны: сервер ужмёт вставку теми же правилами.
+        sendLocked("insert_closed", JSONObject().put("start", start).put("end", end).put("raw", entry.raw)
+            .put("title", entry.title).put("category", entry.category).put("client", entry.client)
+            .put("useful", entry.useful).put("id", entry.id))
         entry
     }
 
@@ -1012,6 +1126,9 @@ class ZasechkaStore(private val context: Context) {
         normalizeLocked()
         entries.sortBy { it.start }
         persist()
+        sendLocked("interruption", JSONObject().put("start", start).put("end", end).put("title", entry.title)
+            .put("category", entry.category).put("resume_previous", resumePrevious).put("client", entry.client)
+            .put("project", entry.project).put("person", entry.person).put("comment", entry.comment).put("id", entry.id))
         entry
     }
 
@@ -1033,6 +1150,7 @@ class ZasechkaStore(private val context: Context) {
         normalizeLocked()
         entries.sortBy { it.start }
         persist()
+        sendLocked("dissolve", JSONObject().put("id", id).put("was", was(call)))
         kept?.let { k -> entries.firstOrNull { it.id == k.id } }
     }
 
@@ -1045,11 +1163,13 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == entry.id }
         if (index >= 0) {
-            snapshotLocked("правку «${entries[index].title.ifBlank { "без названия" }}»")
+            val old = entries[index]
+            snapshotLocked("правку «${old.title.ifBlank { "без названия" }}»")
             entries[index] = entry
             normalizeLocked()
             entries.sortBy { it.start }
             persist()
+            sendLocked("update", JSONObject().put("entry", toServer(entry)).put("was", was(old)))
         }
     }
 
@@ -1057,7 +1177,10 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val doomed = entries.firstOrNull { it.id == id } ?: return@withLock
         snapshotLocked("удаление «${doomed.title.ifBlank { "без названия" }}»")
-        if (entries.removeAll { it.id == id }) persist()
+        if (entries.removeAll { it.id == id }) {
+            persist()
+            sendLocked("delete", JSONObject().put("id", id).put("was", was(doomed)))
+        }
     }
 
     /**
@@ -1090,6 +1213,7 @@ class ZasechkaStore(private val context: Context) {
         }
         normalizeLocked()
         persist()
+        sendLocked("revert", JSONObject().put("started_ids", JSONArray(startedIds.toList())).put("reopen_id", reopenId))
         reopened
     }
 
@@ -1103,11 +1227,13 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val i = entries.indexOfFirst { it.id == id }
         if (i < 0 || entries.any { it.open }) return@withLock null
-        snapshotLocked("возврат «${entries[i].title.ifBlank { "без названия" }}»")
-        val reopened = entries[i].copy(end = 0L)
+        val old = entries[i]
+        snapshotLocked("возврат «${old.title.ifBlank { "без названия" }}»")
+        val reopened = old.copy(end = 0L)
         entries[i] = reopened
         normalizeLocked()
         persist()
+        sendLocked("reopen", JSONObject().put("id", id).put("was", was(old)))
         reopened
     }
 
@@ -1132,6 +1258,7 @@ class ZasechkaStore(private val context: Context) {
         normalizeLocked()
         entries.sortBy { it.start }
         persist()
+        sendLocked("absorb", JSONObject().put("guess_id", guessId).put("said_id", saidId))
         entries.firstOrNull { it.id == saidId } ?: merged
     }
 
@@ -1151,8 +1278,10 @@ class ZasechkaStore(private val context: Context) {
         ensureLoaded()
         val index = entries.indexOfFirst { it.id == id }
         if (index < 0) return@withLock false
-        entries[index] = entries[index].copy(raw = raw)
+        val old = entries[index]
+        entries[index] = old.copy(raw = raw)
         persist()
+        sendLocked("annotate", JSONObject().put("id", id).put("raw", raw).put("was", was(old)))
         true
     }
 
@@ -1172,9 +1301,11 @@ class ZasechkaStore(private val context: Context) {
         val index = entries.indexOfFirst { it.id == id }
         if (index < 0) return@withLock false
         val text = comment.trim()
-        if (entries[index].comment == text) return@withLock true
-        entries[index] = entries[index].copy(comment = text)
+        val old = entries[index]
+        if (old.comment == text) return@withLock true
+        entries[index] = old.copy(comment = text)
         persist()
+        sendLocked("comment", JSONObject().put("id", id).put("comment", text).put("was", was(old)))
         true
     }
 
@@ -1551,6 +1682,8 @@ class ZasechkaStore(private val context: Context) {
                 seedMigrated = true
             }
             clients = root?.optJSONArray("clients")?.toStringList()?.toMutableList() ?: mutableListOf()
+            serverMode = root?.optBoolean("server", false) ?: false
+            serverRev = root?.optLong("serverRev", -1L) ?: -1L
             entries = parseEntries(root).toMutableList()
             // Файл может прочитаться прекрасно и быть ПУСТЫМ - именно это
             // остаётся после карантина прошлой сборки, и именно так владелец
@@ -1846,6 +1979,11 @@ class ZasechkaStore(private val context: Context) {
         put("format", FORMAT)
         put("version", 1)
         put("catSeed", catSeedVersion)
+        // Лента на сервере (26.10.2026): здесь — её окно; поля нет у файла старой сборки — режим phone.
+        if (serverMode) {
+            put("server", true)
+            put("serverRev", serverRev)
+        }
         put(
             "categories",
             JSONArray().apply {

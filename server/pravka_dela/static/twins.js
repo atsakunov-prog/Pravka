@@ -341,6 +341,7 @@ const TWINS = (() => {
   }
   /** Свежесть телефона: лента в вебе свежа настолько, насколько свеж архив. */
   function freshNote(d) {
+    if (d && d.zas_mode === 'server') return null;   // ленту пишет сервер сам — свежее у телефона нет
     const at = d && d.fresh && d.fresh.phone;
     if (!at) return null;
     const ago = Math.round((now() - Date.parse(at)) / 60000);
@@ -360,8 +361,21 @@ const TWINS = (() => {
   }
   const dayOf = (page) => st.open[page + ':day'] || S.today;
 
-  // ── Команды Засечки телефону: веб день в архив не пишет — ставит команду, телефон берёт её синком ──
+  // ── Правка ленты из веба. С передачи ленты серверу (dela_0038, docs/server-truth.md, 26.10.2026) — сразу: операция
+  // zas.op над правдой сервера. До передачи — как раньше: команда телефону, он берёт её синком (zasechka.py). ──
+  const onServer = () => Object.values(st.data).some((d) => d && d.zas_mode === 'server');
+  const DONE_WORD = { start: (r) => `начато «${r.title}»`, stop: () => 'остановлено', edit: (r) => `поправлено «${r.title}»` };
   async function command(kind, args) {
+    if (onServer()) {
+      try {
+        const [r] = await ops([{ op: 'zas.op', kind: 'web_' + kind, args, at: new Date(now()).toISOString() }]);
+        const e = r && r.zas && r.zas.result;
+        toast(e && typeof e === 'object' ? DONE_WORD[kind](e) : 'сделано');
+        drop('zasechka'); drop('day');
+        render();
+        return r;
+      } catch (e) { fail(e); return null; }
+    }
     try {
       const [r] = await ops([{ op: 'zasechka.cmd', cmd: { kind, args, at: new Date(now()).toISOString() } }]);
       // Сколько ждать — честно (записка отладки 25, 18.10.2026): телефон берёт команды раз в ~5 минут и сразу, как
@@ -378,6 +392,7 @@ const TWINS = (() => {
   const CMD_WORD = { start: 'начать', stop: 'стоп', edit: 'поправить' };
   /** Строки команд: что ждёт телефона, что он взял, сделал или не стал — за последний час; снять — пока ждёт. */
   function commandLines(cmds) {
+    if (onServer()) return null;   // лента на сервере: команд телефону больше нет
     const hour = now() - 3600e3;
     const list = (cmds || []).filter((c) => ['wait', 'taken'].includes(c.status)
       || (['done', 'refused'].includes(c.status) && Date.parse(c.done_at || c.created_at) > hour)
@@ -447,7 +462,7 @@ const TWINS = (() => {
 
   return { pages, st, tone, toneClass, mtnClass, spans, profile, caption, mountain, rows, ribbon, ribbonRow, events, totals,
     sourceWord, javaHash, hm, hmMin, now, nowMin, points, rub, num1, timer, load, error, drop, pageHead, card, sec,
-    archiveNote, freshNote, dayLong, dayNav, dayOf, command, cancel, commandLines, pending, current, renderPage };
+    archiveNote, freshNote, dayLong, dayNav, dayOf, command, cancel, commandLines, pending, current, renderPage, onServer };
 })();
 
 /** Маршрут страницы-двойника: только владельцу и только объявленной сервером (look.pages). Для route() в app.js. */

@@ -56,6 +56,11 @@ APP_TABLES = {
     "crm.digests": "SELECT, INSERT, UPDATE",
     # Команды Засечки из веба телефону (dela_0016): только владельцу; строки не удаляются.
     "crm.zasechka_cmds": "SELECT, INSERT, UPDATE",
+    # Лента Засечки на сервере (dela_0038): куски режутся и сливаются — удаление нужно; журнал операций только
+    # дописывается (триггер), режим — одна строка владельца.
+    "crm.zas_entries": "SELECT, INSERT, UPDATE, DELETE",
+    "crm.zas_ops": "SELECT, INSERT",
+    "crm.zas_state": "SELECT, INSERT, UPDATE",
     # Настройки телефона (dela_0015): копия по устройству и журнал правок; правки не удаляются, телефон из списка —
     # пометкой hidden_at (новый снимок его вернёт).
     "crm.phone_devices": "SELECT, INSERT, UPDATE",
@@ -78,10 +83,12 @@ APP_TABLES = {
 # встреч только хозяину записи, team_sees.
 # crm.v_people, crm.v_orgs (dela_0026, аудит №10): карточки человека и компании — поля по тому, кто смотрит.
 APP_VIEWS = ["tasks.v_tasks", "crm.v_deals", "crm.v_interactions", "crm.v_people", "crm.v_orgs"]
-APP_SEQUENCES = ["tasks.task_num"]
+APP_SEQUENCES = ["tasks.task_num", "crm.zas_ops_n_seq"]
 # Архив жизни для страниц-двойников (dela_0016): не схема life, а узкие функции — с них снят PUBLIC, право — здесь.
 # Подъём родителя и его «Вернуть» (dela_0030, правило 27): пишут мимо RLS Круга — тоже только роли службы.
-APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()", "tasks.nest_rise(uuid)", "tasks.nest_fall(uuid)"]
+APP_FUNCTIONS = ["crm.life_rows(text, date, date)", "crm.life_ok()", "tasks.nest_rise(uuid)", "tasks.nest_fall(uuid)",
+                 # Сутки ленты Засечки — в архив (dela_0038): узко, только zasechka.day и zasechka.reference.
+                 "crm.zas_publish(text, text, jsonb, boolean)"]
 
 
 def _sql_files() -> list[tuple[str, str]]:

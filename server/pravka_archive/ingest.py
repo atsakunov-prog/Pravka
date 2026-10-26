@@ -168,6 +168,18 @@ def _store_one(
     refresh_said(conn, kind, key, person)
 
 
+def _ledger_on_server(conn: psycopg.Connection) -> bool:
+    """Передана ли лента владельца серверу Дел (crm.zas_handed, dela_0038). Нет функции (Дела старые или их нет) —
+    нет: архив принимает ленту от телефона, как раньше."""
+    try:
+        with conn.transaction():
+            if conn.execute("SELECT to_regprocedure('crm.zas_handed()') IS NOT NULL").fetchone()[0]:
+                return bool(conn.execute("SELECT crm.zas_handed()").fetchone()[0])
+    except psycopg.Error:
+        return False
+    return False
+
+
 def ingest_batch(
     conn: psycopg.Connection,
     batch: Any,
@@ -226,6 +238,16 @@ def ingest_batch(
                 early.append({"eid": eid, "why": why})
             elif kind in DICTATION_KINDS and not PC_KEY_RE.match(str(ev.get("key"))):
                 early.append({"eid": eid, "why": "key — «pc-<миллисекунды>»: телефонные диктовки служба не трогает"})
+            else:
+                keep.append(ev)
+        events = keep
+    if service is None and person == "" and _ledger_on_server(conn):
+        # Лента Засечки владельца — правда сервера Дел с передачи (dela_0038, docs/server-truth.md): сутки в архив
+        # кладёт он сам (svc-zasechka). Пачка телефона старой сборки затёрла бы их — отказ этим событиям, остальные идут.
+        keep = []
+        for ev in events:
+            if isinstance(ev, dict) and str(ev.get("kind") or "").startswith("zasechka."):
+                early.append({"eid": str(ev.get("eid")), "why": "лента Засечки — на сервере Дел: телефон её больше не шлёт"})
             else:
                 keep.append(ev)
         events = keep

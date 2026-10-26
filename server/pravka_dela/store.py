@@ -24,7 +24,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, nest, people, phone, place, spend,
-               todo, twins, where, zasechka)
+               todo, twins, where, zas, zasechka)
 
 log = logging.getLogger("dela.store")
 
@@ -54,7 +54,9 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers", "todo"]
+            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers", "todo", "zas"]
+# «zas» — лента Засечки на сервере (dela_0038, 26.10.2026, zas.py, contract/dela-zas.json): поле zas синка (режим и окно
+# ленты), операции zas.handover (телефон отдаёт ленту один раз) и zas.op (правки веба и мутаторы телефона).
 # «todo» — Дела в виде Todoist (dela_0036, 19.10.2026, todo.py; новый веб /t): у дела priority (1 — p1 … 4 — без
 # приоритета), deadline, due_rule + recur (повтор: выполнение переносит срок, forever: true у task.done — закрыть
 # насовсем), done_count, section_id; синк — ещё sections; операции section.create / section.set; у проекта — color.
@@ -2402,7 +2404,7 @@ SYNC_TABLES = {
 }
 
 
-def sync(url: str, user: str, since: int) -> dict:
+def sync(url: str, user: str, since: int, zas_rev: Any = None) -> dict:
     """Всё изменившееся после since, что видит user.
 
     full — клиент выбрасывает кэш и берёт ответ целиком: первый синк, снятый
@@ -2434,6 +2436,10 @@ def sync(url: str, user: str, since: int) -> dict:
         cmds = zasechka.for_sync(conn, user)
         if cmds is not None:
             out["zasechka"] = jsonable(cmds)
+        # Лента Засечки на сервере (dela_0038): режим и, когда версия ленты сменилась (zas_rev телефона), окно —
+        # последние двое суток и идущее. Не владельцу поля нет.
+        if (zl := zas.for_sync(conn, user, zas_rev)) is not None:
+            out["zas"] = jsonable(zl)
         # Настройки телефона (dela_0015): правки с компьютера, которые ждут телефоны этого человека. Не таблицей «после
         # seq», а списком ждущих: их единицы, а взятые телефон помнит сам. Нет ждущих — поля нет.
         edits = phone.for_sync(conn, user)
@@ -2876,6 +2882,8 @@ meetings.register(HANDLERS, VIEWS, OpError)
 digest.register(HANDLERS, VIEWS, OpError)
 # Страницы-двойники экранов телефона (dela_0016): команды Засечки телефону и виды day, zasechka, pravka, pogoda.
 zasechka.register(HANDLERS, OpError)
+# Лента Засечки на сервере (dela_0038, 26.10.2026, zas.py): передача с телефона и правки ленты — веб и телефон.
+zas.register(HANDLERS, OpError)
 twins.register(VIEWS, OpError, FEATURES)  # и вид calls — звонки для разноски дайджеста (dela_0035, флаг calls)
 # Настройки телефона (dela_0015): снимок от телефона, правка с компьютера, вид phone (phone.py).
 phone.register(HANDLERS, VIEWS, OpError)

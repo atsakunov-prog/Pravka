@@ -52,7 +52,7 @@ TWINS.pages.day = (() => {
         el('div', { class: 'tw-grow' }, el('div', { class: 'tw-nt' }, title),
           sub ? el('div', { class: 'tw-ns' }, e && e.category ? el('span', { class: 'sq ' + T.toneClass(e.category) }) : null, sub) : null),
         e && e.start_at ? el('div', { class: 'tw-timer', 'data-tw-start': e.start_at }, T.timer(T.now() - Date.parse(e.start_at))) : null,
-        e ? el('button', { class: 'btn small', disabled: stopWait, title: stopWait ? 'Стоп уже ждёт телефона' : 'Остановить — команда телефону',
+        e ? el('button', { class: 'btn small', disabled: stopWait, title: stopWait ? 'Стоп уже ждёт телефона' : d.zas_mode === 'server' ? 'Остановить' : 'Остановить — команда телефону',
           onclick: () => T.command('stop', { entry_id: e.id }) }, icon('stop', 15), stopWait ? 'ждёт' : 'Стоп') : null),
       T.mountain(prof, { height: 58 }),
       el('div', { class: 'tw-val' }, el('b', { class: prof.value < 0 ? 'warn' : '' }, T.points(prof.value)),
