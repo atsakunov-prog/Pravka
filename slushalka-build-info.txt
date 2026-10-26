@@ -1,0 +1,6 @@
+slushalka=1.1.891
+apk=slushalka.apk
+versionCode=891
+commit=0cb16b4bb60626387fcbfba916a80c9d4376cd09
+branch=slushalka
+builtAt=2026-10-17T06:00Z
