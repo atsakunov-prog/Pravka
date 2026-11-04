@@ -772,17 +772,20 @@ internal fun SpeechSection(
     var downloading by remember { mutableStateOf(false) }
 
     val isGoogle = engine == Settings.SPEECH_GOOGLE
+    // Есть ли русский офлайн-пакет — правдой, а не «служба на устройстве есть»
+    // (04.11.2026: пакета не было неделю, а здесь стояло «офлайн-пакет — запас»).
+    val pack by ru.zf.pravka.provider.GoogleSpeechSession.offlinePackFlow.collectAsState()
+    LaunchedEffect(Unit) { ru.zf.pravka.provider.GoogleSpeechSession.probeOfflinePack(context, force = true) }
     suspend fun statusFor(e: String): String = when {
         e == Settings.SPEECH_GOOGLE ->
             if (ru.zf.pravka.provider.GoogleSpeechSession.isAvailable(context)) {
-                val onDevice = ru.zf.pravka.provider.GoogleSpeechSession.isOnDevice(context)
+                val packLine = ru.zf.pravka.provider.GoogleSpeechSession.offlinePackLabel(context)
                 val path = when {
                     // Сетевой путь — тот, каким клавиатура Google идёт на русском;
                     // офлайн-пакет остаётся и её, и нашим запасом без сети.
-                    network && onDevice -> " · путь: облако, офлайн-пакет — запас"
-                    network -> " · путь: облако; офлайн-пакета нет — без сети распознавать нечем"
-                    onDevice -> " · путь: офлайн-пакет на устройстве"
-                    else -> " · офлайн-пакета нет — пока распознаёт сетевой сервис, скачай русскую модель"
+                    network -> " · путь: облако\nЗапас: $packLine"
+                    ru.zf.pravka.provider.GoogleSpeechSession.offlineUsable(context) -> " · путь: офлайн-пакет на устройстве"
+                    else -> " · путь: офлайн-пакет, но $packLine — пока тейки идут облаком"
                 }
                 // Кто именно распознаёт по сети: «облако» в настройке ещё не
                 // значит «Google» — системная служба по умолчанию на части
@@ -796,7 +799,7 @@ internal fun SpeechSection(
         else -> whisperProvider.statusText(e)
     }
 
-    LaunchedEffect(engine, downloading, network) { status = statusFor(engine) }
+    LaunchedEffect(engine, downloading, network, pack) { status = statusFor(engine) }
 
     // Движок и путь — чипами (24.09.2026): три радиокнопки с подписью на две
     // строки читались анкетой; выбор из трёх виден разом и одним тапом.

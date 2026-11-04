@@ -64,6 +64,18 @@ class TakeHealth(private val startedAtMs: Long) {
         offline = why
     }
 
+    /**
+     * Тейк слушал облако, хотя путь был пакетом: русского пакета нет
+     * (`OfflinePack`, 04.11.2026) — почему словами; null — не возвращали.
+     */
+    var cloudAgain: String? = null
+        private set
+
+    fun toCloud(why: String) {
+        if (closed || cloudAgain != null) return
+        cloudAgain = why
+    }
+
     fun stuck(speechMs: Long) {
         if (closed) return
         stuck++
@@ -139,6 +151,7 @@ class TakeHealth(private val startedAtMs: Long) {
         errorsLine().takeIf { it.isNotEmpty() }?.let { append(" · ошибки ").append(it) }
         if (stuck > 0) append(" · застревал ").append(stuck).append(" раз (").append(mutedSpeechMs).append(" мс речи без слов)")
         offline?.let { append(" · облако → офлайн-пакет (").append(it).append(")") }
+        cloudAgain?.let { append(if (offline != null) " → снова облако (" else " · облаком (").append(it).append(")") }
         mic?.let { append(" · слушал ").append(it) }
         when (fed) {
             true -> append(" · звук Правки")

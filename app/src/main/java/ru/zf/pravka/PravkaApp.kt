@@ -103,6 +103,8 @@ class PravkaApp : Application() {
         }
         // Сколько служба речи Google работала на Правку — тейки, переразбор, прогрев.
         ru.zf.pravka.provider.GoogleSpeechSession.useSink = { kind, ms -> speechUse.add(kind, ms) }
+        // Есть ли русский офлайн-пакет — проверка идёт и после тейка, без своего журнала.
+        ru.zf.pravka.provider.GoogleSpeechSession.journalSink = { line -> eventLog.add(line) }
         // Чистка — на Опус (18.09.2026), даже если в «Моделях» стоял явный Сонет;
         // затем все дороги Опуса и Fable — на Опус 5.5 с новыми усилиями (22.09);
         // затем чистка — на Сонет 5.5 (30.09). Порядок важен: последняя снимает

@@ -55,7 +55,7 @@
     <string name="google_ready">Готово (тот же движок, что в голосовом вводе клавиатуры)</string>
     <string name="google_unavailable">Недоступно. Включи офлайн-распознавание речи в настройках Android / Google.</string>
     <string name="google_prepare">Подготовить русскую модель</string>
-    <string name="google_prepare_started">Запросил загрузку офлайн-пакета. Проверь статус через минуту.</string>
+    <string name="google_prepare_started">Попросил Android скачать русский офлайн-пакет. Строка выше обновится сама, когда он встанет.</string>
     <string name="fab_menu_business">Деловой стиль</string>
     <string name="fab_menu_soften">Мягче</string>
     <string name="fab_menu_undo">Откатить последнюю правку</string>

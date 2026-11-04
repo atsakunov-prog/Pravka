@@ -16,6 +16,7 @@ import android.speech.SpeechRecognizer
 import ru.zf.pravka.core.ListenPolicy
 import ru.zf.pravka.core.HeadsetPress
 import ru.zf.pravka.core.MicPlan
+import ru.zf.pravka.core.OfflinePack
 import ru.zf.pravka.core.TakeHealth
 
 // Live, streaming speech recognition via Android's SpeechRecognizer - the same
@@ -391,6 +392,35 @@ class GoogleSpeechSession(
         /** Сказано ли владельцу, что облако не отвечает, а пакета нет, — в этот раз молчания. */
         @Volatile private var noOfflineTold = 0L
 
+        // ---- Русский офлайн-пакет: есть ли он на деле (`core/OfflinePack.kt`, 04.11.2026) ----
+
+        private val packInfo = kotlinx.coroutines.flow.MutableStateFlow(OfflinePack.Info())
+
+        /** Что известно о русском офлайн-пакете — настройкам. */
+        val offlinePackFlow: kotlinx.coroutines.flow.StateFlow<OfflinePack.Info> = packInfo
+
+        @Volatile private var packProbedAtMs = 0L
+        @Volatile private var packProbing = false
+        @Volatile private var packDownloadAskedAtMs = 0L
+        /** Сказано ли владельцу, что пакета нет, — раз на [OfflinePack.MISSING_TTL_MS]. */
+        @Volatile private var packMissingToldAtMs = 0L
+
+        /** Служба не ответила на проверку за столько — отпускаем клиента. */
+        private const val PACK_PROBE_TIMEOUT_MS = 10_000L
+
+        /** После просьбы скачать — спросить снова через столько: встал ли пакет в очередь. */
+        private const val PACK_RECHECK_MS = 30_000L
+
+        /**
+         * Журнал службы телефона: проверка пакета идёт и после тейка, где
+         * своего журнала у вызова нет. Ставит `PravkaApp`. Любой поток.
+         */
+        @Volatile var journalSink: ((String) -> Unit)? = null
+
+        private fun journal(line: String) {
+            journalSink?.let { sink -> runCatching { sink(line) } }
+        }
+
         /**
          * Какая сеть сейчас — чтобы узнать, сменилась ли: у VPN, включённого
          * заново, и у другой Wi-Fi свой номер сети.
@@ -610,6 +640,9 @@ class GoogleSpeechSession(
                 warmMain.post { warmUp(context, network, log) }
                 return
             }
+            // Заодно — правда о русском пакете (не чаще раза в полчаса): прогрев
+            // зовут на подъёме службы и после тейка, когда микрофон свободен.
+            probeOfflinePack(context)
             if (warmClient != null && warmNetwork == network) {
                 // Уже тёплый: просто продлеваем, не трогая привязку.
                 warmMain.removeCallbacks(warmDrop)
@@ -686,6 +719,10 @@ class GoogleSpeechSession(
             // И что облако молчало: «перезагрузить» значит попробовать его снова.
             cloudDeadAtMs = 0L
             cloudDeadNet = ""
+            // И что знали о русском пакете: спросить службу заново.
+            packInfo.value = OfflinePack.Info()
+            packProbedAtMs = 0L
+            packMissingToldAtMs = 0L
             warmMain.postDelayed({ warmUp(context, network, log) }, 300)
         }
 
@@ -713,8 +750,128 @@ class GoogleSpeechSession(
         /** Работает ли распознавание на устройстве (тот же путь, что у клавиатуры Google). */
         fun isOnDevice(context: Context): Boolean = onDeviceAvailable(context)
 
+        /**
+         * Можно ли уходить на офлайн-пакет: служба на устройстве есть И русский
+         * пакет не известен как отсутствующий (`OfflinePack.usable`). Только
+         * это — запас облака; [onDeviceAvailable] говорит лишь о службе.
+         */
+        internal fun offlineUsable(context: Context): Boolean =
+            OfflinePack.usable(onDeviceAvailable(context), packInfo.value, android.os.SystemClock.elapsedRealtime())
+
+        /** Строка для настроек: что с русским пакетом на деле. */
+        fun offlinePackLabel(context: Context): String =
+            OfflinePack.label(onDeviceAvailable(context), packInfo.value, android.os.SystemClock.elapsedRealtime())
+
+        /**
+         * Спросить офлайн-службу, установлен ли русский пакет
+         * (`checkRecognitionSupport`, Android 13+): микрофона не трогает, свой
+         * клиент, отпускается сразу. Не чаще раза в полчаса; [force] — после
+         * скачивания, ошибки тейка, с экрана настроек.
+         */
+        fun probeOfflinePack(context: Context, force: Boolean = false) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                warmMain.post { probeOfflinePack(context, force) }
+                return
+            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (packProbing || !OfflinePack.probeDue(packProbedAtMs, now, force)) return
+            if (!onDeviceAvailable(context)) return
+            val app = context.applicationContext
+            val r = runCatching { SpeechRecognizer.createOnDeviceSpeechRecognizer(app) }.getOrNull() ?: return
+            packProbing = true
+            packProbedAtMs = now
+            var timeout: Runnable? = null
+            fun done() {
+                timeout?.let { warmMain.removeCallbacks(it) }
+                if (!packProbing) return
+                packProbing = false
+                runCatching { r.destroy() }
+            }
+            timeout = Runnable {
+                if (packProbing) journal("офлайн-пакет: служба не ответила на проверку за ${PACK_PROBE_TIMEOUT_MS / 1000} с")
+                done()
+            }
+            warmMain.postDelayed(timeout, PACK_PROBE_TIMEOUT_MS)
+            runCatching {
+                r.checkRecognitionSupport(
+                    Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                        putExtra(RecognizerIntent.EXTRA_LANGUAGE, PACK_LANGUAGE)
+                    },
+                    app.mainExecutor,
+                    object : android.speech.RecognitionSupportCallback {
+                        override fun onSupportResult(support: android.speech.RecognitionSupport) {
+                            val probed = OfflinePack.fromSupport(
+                                PACK_LANGUAGE,
+                                support.installedOnDeviceLanguages,
+                                support.pendingOnDeviceLanguages,
+                            )
+                            val old = packInfo.value
+                            packInfo.value = OfflinePack.afterProbe(old, probed)
+                            // В журнал — смена и каждый «нет»: по журналу потом и разбирают.
+                            if (old.state != probed || probed != OfflinePack.State.INSTALLED) {
+                                journal("офлайн-пакет: ${OfflinePack.word(probed)}")
+                            }
+                            done()
+                            if (probed == OfflinePack.State.MISSING) askPackDownload(app, "проверка")
+                        }
+
+                        override fun onError(error: Int) {
+                            journal("офлайн-пакет: проверка не вышла, код $error")
+                            done()
+                        }
+                    },
+                )
+            }.onFailure {
+                journal("офлайн-пакет: проверка не вышла — ${it.javaClass.simpleName}")
+                done()
+            }
+        }
+
+        /** Язык пакета, о котором спрашиваем и который просим скачать. */
+        private const val PACK_LANGUAGE = "ru-RU"
+
+        /**
+         * Попросить Android скачать русский пакет самому — не чаще раза в
+         * полдня (`OfflinePack.downloadDue`); через полминуты спросить, встал
+         * ли он в очередь. true — попросил.
+         */
+        private fun askPackDownload(context: Context, why: String): Boolean {
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (!OfflinePack.downloadDue(packDownloadAskedAtMs, now)) return false
+            packDownloadAskedAtMs = now
+            journal("офлайн-пакет: русского нет ($why) — попросил Android скачать")
+            triggerModelDownload(context)
+            return true
+        }
+
+        /**
+         * Тейк на пакете получил «пакета нет» (ошибка 12/13): запомнить, забыть
+         * «облако молчало» — пакетом слушать нечего, следующие тейки снова
+         * облаком, — попросить скачать, сказать владельцу раз в эпизод.
+         */
+        private fun packMissingInTake(context: Context, code: Int) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            packInfo.value = OfflinePack.afterTakeMiss(packInfo.value, now)
+            cloudDeadAtMs = 0L
+            cloudDeadNet = ""
+            cloudEventSink?.let { sink -> runCatching { sink("офлайн-пакет: русского нет (ошибка $code)") } }
+            val asked = askPackDownload(context, "ошибка $code в тейке")
+            if (packMissingToldAtMs > 0L && now - packMissingToldAtMs in 0 until OfflinePack.MISSING_TTL_MS) return
+            packMissingToldAtMs = now
+            noticeSink?.let {
+                runCatching {
+                    it(
+                        "Русского офлайн-пакета на телефоне нет — слушаю облаком" +
+                            if (asked) ". Попросил Android скачать пакет заново" else ""
+                    )
+                }
+            }
+        }
+
         /** Asks the system to fetch the offline language pack, if that API exists. */
-        fun triggerModelDownload(context: Context, language: String = "ru-RU") {
+        fun triggerModelDownload(context: Context, language: String = PACK_LANGUAGE) {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
             runCatching {
                 val r = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
@@ -726,6 +883,9 @@ class GoogleSpeechSession(
                 // Give the request a moment to register, then release.
                 Handler(Looper.getMainLooper()).postDelayed({ runCatching { r.destroy() } }, 2000)
             }
+            // Встал ли пакет в очередь или уже лёг — спросить службу заново.
+            val app = context.applicationContext
+            warmMain.postDelayed({ probeOfflinePack(app, force = true) }, PACK_RECHECK_MS)
         }
     }
 
@@ -753,6 +913,9 @@ class GoogleSpeechSession(
             // гарнитуры держится секунды — тейк сразу офлайн-пакетом, если он
             // наш звук не отвергал (`ListenPolicy.headsetToOffline`).
             val startOffline = headsetStartOffline() ?: deadCloudStartOffline()
+            // Путь в настройках — офлайн-пакет, а русского пакета нет: тейк облаком,
+            // иначе каждый тейк — ошибка 13 и ни слова (`OfflinePack`, 04.11.2026).
+            val packGone = noPackStartCloud()
             val r = createRecognizer()
             if (r == null) {
                 onLog("start FAILED: no recognizer")
@@ -772,6 +935,7 @@ class GoogleSpeechSession(
             healthyWordsAtMs = startedAtMs
             health = TakeHealth(startedAtMs)
             startOffline?.let { health.toOffline(it) }
+            packGone?.let { health.toCloud(it) }
             quickSilences = 0
             voicedMs = 0L
             lastLevelAtMs = 0L
@@ -782,7 +946,8 @@ class GoogleSpeechSession(
             onLog(
                 "start путь=${if (networkNow) "сеть" else "офлайн-пакет"} " +
                     "служба=${if (networkNow) networkServiceLabel(context) else "офлайн-пакет устройства"} " +
-                    "onDevice=${onDeviceAvailable(context)} biasing=${biasing.size} " +
+                    "onDevice=${onDeviceAvailable(context)} пакет=${if (offlineUsable(context)) "запас" else "нет"} " +
+                    "biasing=${biasing.size} " +
                     "formatting=$formatting segmentedRequested=$segmentedSession"
             )
             // Системному распознавателю входное устройство не укажешь: он
@@ -1191,7 +1356,7 @@ class GoogleSpeechSession(
         // «готов» — следующий тейк на этой сети пусть идёт сразу пакетом.
         val tookMs = android.os.SystemClock.elapsedRealtime() - startedAtMs
         if (networkNow && sessionsStarted > 0 && !readyThisSession && liveText().isBlank() &&
-            tookMs >= CLOUD_SHORT_TAKE_MS && onDeviceAvailable(context)
+            tookMs >= CLOUD_SHORT_TAKE_MS && offlineUsable(context)
         ) {
             cloudDeadAtMs = android.os.SystemClock.elapsedRealtime()
             cloudDeadNet = netKey(context)
@@ -1376,6 +1541,14 @@ class GoogleSpeechSession(
             // Words the recognizer refused to finalize (NO_MATCH on rare words)
             // are still in lastPartial - rescue them before anything else.
             promoteOrphanedPartial("error $error")
+            // Пакет ответил «русского нет» (12/13) — слушать им нечего: тейк
+            // назад в облако, следующие тоже облаком. До 04.11.2026 эта ошибка
+            // крутилась десятками за тейк, и пять минут после сбоя облака все
+            // тейки уходили в пустоту.
+            if (!networkNow && OfflinePack.missingCode(error)) {
+                packMissingInTake(context, error)
+                if (backToCloud("офлайн-пакета нет (ошибка $error)")) return
+            }
             // Дорога до облака (сеть, сервер) — не ждать её, а дослушать пакетом.
             if (ListenPolicy.cloudLost(error) && toOffline("ошибка $error", cloudError = true)) return
             errorStreak++
@@ -1635,7 +1808,7 @@ class GoogleSpeechSession(
         val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val wantHeadset = !HeadsetPress.phoneMic(ownerChosePhone = app?.phoneMicOnly != false, fromHeadset = fromHeadset) &&
             MicRouting.headsetMic(am) != null && !MicRouting.callInProgress(am)
-        if (!ListenPolicy.headsetToOffline(wantHeadset, networkNow, feedRefused(true), onDeviceAvailable(context), feedRefused(false))) return null
+        if (!ListenPolicy.headsetToOffline(wantHeadset, networkNow, feedRefused(true), offlineUsable(context), feedRefused(false))) return null
         networkNow = false
         val v = feedVerdict[true]
         onLog("наушники: облако звук Правки не взяло в ${v?.atMs?.let { clock(it) }} (${v?.why}) — тейк слушает офлайн-пакет")
@@ -2057,8 +2230,64 @@ class GoogleSpeechSession(
         cloudEventSink?.let { sink -> runCatching { sink("облако молчит, офлайн-пакета нет") } }
         onLog("облако молчит, а офлайн-пакета нет — перекинуть некуда")
         noticeSink?.let {
-            runCatching { it("Облако Google не отвечает (нет сети? VPN?), а офлайн-пакета нет — Правка → «Подготовить модель»") }
+            runCatching {
+                it(
+                    "Облако Google не отвечает (нет сети? VPN?), а русского офлайн-пакета нет — " +
+                        "Настройки → «Микрофон и распознавание» → «Подготовить русскую модель»"
+                )
+            }
         }
+    }
+
+    /**
+     * Путь тейка — офлайн-пакет (настройка или решение на старте), а русского
+     * пакета нет: начать облаком. Причина — строкой для итога тейка; null —
+     * путь не меняли.
+     */
+    private fun noPackStartCloud(): String? {
+        if (networkNow || offlineUsable(context)) return null
+        if (!(anyAvailable(context) || googleService(context) != null)) return null
+        networkNow = true
+        onLog("русского офлайн-пакета нет — тейк облаком")
+        return "офлайн-пакета нет"
+    }
+
+    /** Тейк уже возвращался из пакета в облако — второй раз не прыгаем. */
+    private var backedToCloud = false
+
+    /**
+     * Пакет ответил «русского нет» — вернуть тейк в облако (зеркало
+     * [toOffline]): новый распознаватель сетевого пути, звук с последнего
+     * слова повторяется ему из своей записи. Облако и вправду мертво —
+     * его сторожа скажут «облако не отвечает, а пакета нет» словами, а не
+     * пустым тейком. Один раз за тейк. true — вернули.
+     */
+    private fun backToCloud(why: String): Boolean {
+        if (!active || stopping || networkNow || backedToCloud) return false
+        if (!(anyAvailable(context) || googleService(context) != null)) return false
+        val fresh = newRecognizer(context, network = true) ?: return false
+        backedToCloud = true
+        onLog(
+            "$why — возвращаю тейк в облако" +
+                if (feed != null) ", звук с последнего слова повторю" else ""
+        )
+        val old = recognizer
+        networkNow = true
+        boundGoogle = serviceFor(context, true) != null
+        health.toCloud(why)
+        voicedMs = 0L
+        fresh.setRecognitionListener(listener)
+        recognizer = fresh
+        runCatching { old?.cancel() }
+        runCatching { old?.destroy() }
+        sessionLive = false
+        restartPending = false
+        recognizerReadyOnce = false
+        feedAccepted = false
+        stuckRestarts = 0
+        mutedSpeechMs = 0
+        main.postDelayed({ if (active && !stopping && recognizer === fresh) startListening() }, OFFLINE_START_MS)
+        return true
     }
 
     /**
@@ -2066,7 +2295,7 @@ class GoogleSpeechSession(
      * тейк сразу офлайн-пакетом, не тратя первые секунды на то же молчание.
      */
     private fun deadCloudStartOffline(): String? {
-        if (!networkNow || !onDeviceAvailable(context)) return null
+        if (!networkNow || !offlineUsable(context)) return null
         val now = android.os.SystemClock.elapsedRealtime()
         val net = netKey(context)
         if (!ListenPolicy.cloudStillDead(cloudDeadAtMs, now, cloudDeadNet == net)) return null
@@ -2093,7 +2322,7 @@ class GoogleSpeechSession(
         silent: Boolean = false,
     ): Boolean {
         if (!active || stopping) return false
-        if (!ListenPolicy.toOffline(networkNow, onDeviceAvailable(context), cloudError, stuckRestarts, stalled, headsetRefused, silent)) return false
+        if (!ListenPolicy.toOffline(networkNow, offlineUsable(context), cloudError, stuckRestarts, stalled, headsetRefused, silent)) return false
         val fresh = newRecognizer(context, network = false) ?: return false
         onLog(
             "облако подвело ($why) — дослушиваю тейк офлайн-пакетом" +
@@ -2267,7 +2496,7 @@ class GoogleSpeechSession(
     private fun errorText(code: Int): String = when (code) {
         SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
         SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ->
-            "Русский офлайн-пакет не установлен. Открой Правку → «Подготовить модель»."
+            "Русский офлайн-пакет не установлен. Настройки → «Микрофон и распознавание» → «Подготовить русскую модель»."
         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Нет доступа к микрофону"
         // Облачный путь стал заводским (22.09.2026), и «нет сети» теперь не
         // абстракция, а лифт и подземный паркинг. Ошибка обязана называть
