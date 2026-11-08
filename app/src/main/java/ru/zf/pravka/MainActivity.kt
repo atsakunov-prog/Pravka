@@ -416,8 +416,6 @@ internal enum class Tab(val titleRes: Int) {
     SHOWCASE(R.string.tab_showcase),
     /** Баги и предложения с кнопок (07.10.2026, `docs/feedback.md`). */
     FEEDBACK(R.string.tab_feedback),
-    /** «Где мы»: семья на карте аватарами (10.10.2026, docs/gde.md). */
-    WHERE(R.string.tab_where),
 }
 
 /**

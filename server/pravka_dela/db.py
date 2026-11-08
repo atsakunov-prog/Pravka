@@ -45,9 +45,6 @@ APP_TABLES = {
     "crm.state": "SELECT, INSERT, UPDATE",
     "crm.history": "SELECT",
     "crm.svod": "SELECT, INSERT, UPDATE",
-    # «Где мы»: одна последняя точка на телефон, перестал делиться — строка удаляется (dela_0008).
-    "crm.where_points": "SELECT, INSERT, UPDATE, DELETE",
-    "crm.where_asks": "SELECT, INSERT, UPDATE, DELETE",
     # Встречи (dela_0010): карточка с журналом; реплики расшифровки новая присылка заменяет целиком.
     "crm.meetings": "SELECT, INSERT, UPDATE",
     "crm.meeting_lines": "SELECT, INSERT, DELETE",

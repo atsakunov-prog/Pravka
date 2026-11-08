@@ -8,7 +8,7 @@
   remind-notes  перенос строк «⏰ Напомнить…» из заметок в напоминания (разово, повтор безвреден)
   token    выдать токен службе или устройству (печатается один раз)
   pair     QR для телефона: адрес и новый токен устройства
-  family   кто в семье для «Где мы» (карта Правки): видит точки семьи и делится своей
+  family   кто в семье: свои в дайджесте и карточках людей («Где мы» снято 08.11.2026)
   invite   одноразовая ссылка входа в веб для пользователя
   revoke   отозвать токены по имени
   import   перенос из снимков Todoist, Notion и ленты (сухой прогон по умолчанию)
@@ -121,9 +121,10 @@ def cmd_user(args) -> int:
 
 
 def cmd_family(args) -> int:
-    """Кто в семье для «Где мы» (10.10.2026): видит точки семьи на карте Правки и делится своей.
-    Только из командной строки: сам себя в семью человек не добавит (crm.users_guard). Без
-    аргументов — кто сейчас в семье. Убранный из семьи сразу перестаёт видеть и его точка уходит."""
+    """Кто в семье (10.10.2026): по флагу дайджест и карточки людей узнают своих (digest_crm,
+    people._team_and_family). Заводился для «Где мы» — карта снята 08.11.2026 (dela_0039), флаг остался.
+    Только из командной строки: сам себя в семью человек не добавит (crm.users_guard). Без аргументов —
+    кто сейчас в семье."""
     cfg = config_mod.load(args.env)
     with db.session(cfg.db_url, "system", "svc:cli") as conn:
         if args.user:
@@ -132,9 +133,6 @@ def cmd_family(args) -> int:
             if not row:
                 print(f"пользователя {args.user} нет — сначала команда user")
                 return 1
-            if args.off:
-                conn.execute("DELETE FROM crm.where_points WHERE user_id = %s", (args.user,))
-                conn.execute("DELETE FROM crm.where_asks WHERE user_id = %s", (args.user,))
         rows = conn.execute("SELECT id, name FROM crm.users WHERE family ORDER BY id").fetchall()
     print("в семье: " + (", ".join(f"{r['id']} ({r['name']})" for r in rows) or "никого"))
     return 0
@@ -666,9 +664,9 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--person", help="кто он в справочнике людей (имя или короткое имя)")
     u.set_defaults(fn=cmd_user)
 
-    fm = sub.add_parser("family", help="кто в семье для «Где мы»")
+    fm = sub.add_parser("family", help="кто в семье (свои в дайджесте и карточках людей)")
     fm.add_argument("user", nargs="?", help="кого добавить (или убрать с --off); без него — список")
-    fm.add_argument("--off", action="store_true", help="убрать из семьи: перестаёт видеть, его точка уходит")
+    fm.add_argument("--off", action="store_true", help="убрать из семьи")
     fm.set_defaults(fn=cmd_family)
 
     tg = sub.add_parser("telegram")

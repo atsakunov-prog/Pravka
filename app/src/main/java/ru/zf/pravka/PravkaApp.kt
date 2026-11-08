@@ -126,6 +126,16 @@ class PravkaApp : Application() {
         appScope.launch { runCatching { settings.retireOldWakeDeal() } }
         // Правка на диете (22.10.2026): «Д» со стекла и ночной разбор — один раз.
         appScope.launch { runCatching { settings.slimOnce() } }
+        // «Где мы» снято (на телефоне — 22.10.2026, на сервере — 08.11.2026): в папке базы остались последняя своя
+        // точка, точки семьи и аватары (`where.json`, `where/`). Убрать: карты нет, а чужие точки — не наш файл.
+        // Нет их — два взгляда в папку, и всё.
+        appScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                val base = ru.zf.pravka.data.DataRoot.dir(this@PravkaApp)
+                base.listFiles { f -> f.isFile && f.name.startsWith("where.json") }?.forEach { it.delete() }
+                java.io.File(base, "where").takeIf { it.isDirectory }?.deleteRecursively()
+            }
+        }
         // Переразбор истории (core/HistoryFixes.kt): правка разбора, пришедшая
         // с этой сборкой, один раз проходит по накопленному и выводит его заново
         // из сырья — вчерашний пуш не остаётся вчерашним разбором.

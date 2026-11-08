@@ -24,7 +24,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, nest, people, phone, place, spend,
-               todo, twins, where, zas, zasechka)
+               todo, twins, zas, zasechka)
 
 log = logging.getLogger("dela.store")
 
@@ -51,7 +51,7 @@ TASK_FIELDS = {
 
 # Что этот сервер умеет сверх части 1 контракта — в каждом ответе синка и /api/me. Без «remind»
 # телефон полей remind_* не шлёт: _pick отверг бы операцию целиком, а с ней и дело.
-FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug", "meetings", "tree", "place", "options",
+FEATURES = ["remind", "svod", "people", "dictations", "groups", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
             "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers", "todo", "zas"]
@@ -146,8 +146,8 @@ FEATURES = ["remind", "svod", "people", "dictations", "groups", "where", "krug",
 # предлагает: старый сервер отверг бы и вид, и источник.
 # «dictations» — операция dictation.add: текст наговорки, из которой вышли дела (их source_ref = её id),
 # для «Нового» веба (06.10.2026).
-# «where» — «Где мы» (10.10.2026, where.py): операции where.set / where.off / where.ask и виды where,
-# where_avatar — точки семьи для карты Правки. Без флага телефон говорит «сервер Дел не обновлён».
+# «where» («Где мы», карта семьи, 10.10.2026) снят 08.11.2026 (dela_0039): ни операций, ни видов, ни флага. Старая
+# сборка Правки на «нет такого вида» перестаёт искать себя по расписанию обмена и ничего не шлёт.
 # «groups» — поле owed (группа «Отбить» — ждут от меня, dela_0007, 10.10.2026) в task.create и task.set; без него телефон
 # owed не шлёт, а «ждут от меня» из разноски передаёт как ball «owed» — сервер поймёт и так (store._ball_norm).
 # «meetings» — встречи в базе (dela_0010, 12.10.2026, meetings.py): операции meeting.upsert (служба встреч) и meeting.set
@@ -2872,8 +2872,6 @@ VIEWS: dict[str, Callable] = {
     "search": view_search,
 }
 
-# «Где мы»: операции и виды точек семьи — свой модуль (where.py), как люди и статистика.
-where.register(HANDLERS, VIEWS, OpError)
 # Круг жизни: вид krug — направления, движение, дерево «Зачем» (krug.py).
 krug.register(VIEWS)
 # Встречи (dela_0010): приём от службы встреч, правка владельцем, список и карточка (meetings.py).
