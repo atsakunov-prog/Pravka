@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Кнопка категории на виджете Засечки, плиткой: значок над названием. Касание — «переключить на …»
+     (`ZasechkaQuickActivity.W_SWITCH`). Название в две строки целиком: «Передвижение:» и «Систематизация»
+     влезают в треть виджета, если значок не отнимает ширину. -->
+<!-- Зазор между кнопками — полями рамки (по 3dp с боков), а ряд сдвинут на −3dp: поля через RemoteViews
+     ставятся только с Android 12, а так крайние кнопки ровно по краю. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_cat_box"
+    android:layout_width="0dp"
+    android:layout_height="wrap_content"
+    android:layout_weight="1"
+    android:paddingStart="3dp"
+    android:paddingEnd="3dp">
+
+<LinearLayout
+    android:id="@+id/w_cat"
+    android:layout_width="match_parent"
+    android:layout_height="62dp"
+    android:background="@drawable/widget_tile"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:paddingStart="4dp"
+    android:paddingTop="4dp"
+    android:paddingEnd="4dp"
+    android:paddingBottom="4dp">
+
+    <ImageView
+        android:id="@+id/w_cat_icon"
+        android:layout_width="18dp"
+        android:layout_height="18dp"
+        android:importantForAccessibility="no"
+        android:scaleType="fitCenter" />
+
+    <TextView
+        android:id="@+id/w_cat_text"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:includeFontPadding="false"
+        android:maxLines="2"
+        android:textColor="#FFF2ECE2"
+        android:textSize="11.5sp" />
+</LinearLayout>
+</FrameLayout>

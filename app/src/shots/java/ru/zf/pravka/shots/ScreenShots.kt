@@ -1880,22 +1880,24 @@ class ScreenShots {
     }
 
     /**
-     * Виджет Засечки (11.10.2026): три размера на тёмных обоях — строка 4×1,
-     * 4×2 без «ещё раз» и высокий 4×3. Данные — посев снимков (идёт
-     * «Друзья в гостях»).
+     * Виджет Засечки (11.10.2026; «Пульт» и две колонки — 08.11.2026): строка 4×1, 4×2, «Пульт» 4×4, узкий
+     * и широкий в две колонки на тёмных обоях. Данные — посев снимков.
      */
     private fun widgets() {
         val app = RuntimeEnvironment.getApplication() as PravkaApp
-        val model = runBlocking { ru.zf.pravka.core.ZWidget.model(app.zasechkaStore.all(), System.currentTimeMillis()) }
+        val model = runBlocking {
+            ru.zf.pravka.core.ZWidget.model(app.zasechkaStore.all(), System.currentTimeMillis(), app.zasechkaStore.categories().map { it.name })
+        }
         val d = app.resources.displayMetrics.density
-        for ((name, size, dims) in listOf(
-            Triple("widget-1-row", ru.zf.pravka.core.ZWidget.Size.ROW, 320 to 76),
-            Triple("widget-2-actions", ru.zf.pravka.core.ZWidget.Size.ACTIONS, 320 to 150),
-            Triple("widget-3-full", ru.zf.pravka.core.ZWidget.Size.FULL, 320 to 200),
-            Triple("widget-4-narrow", ru.zf.pravka.core.ZWidget.Size.ACTIONS, 170 to 150),
+        for ((name, dims) in listOf(
+            "widget-1-row" to (320 to 76),
+            "widget-2-short" to (320 to 180),
+            "widget-3-pult" to (360 to 476),
+            "widget-4-narrow" to (180 to 300),
+            "widget-5-wide" to (660 to 340),
         )) {
             val (wDp, hDp) = dims
-            val rv = ru.zf.pravka.trigger.ZasechkaWidget.views(app, model, size, ru.zf.pravka.core.ZWidget.wide(wDp), true)
+            val rv = ru.zf.pravka.trigger.ZasechkaWidget.views(app, model, ru.zf.pravka.core.ZWidget.plan(wDp, hDp), true, wDp)
             val host = android.widget.FrameLayout(app)
             val v = rv.apply(app, host)
             val w = (wDp * d).toInt()

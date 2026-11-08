@@ -422,7 +422,7 @@ fun worthText(worth: Int): Color =
     if (Look.v2 && !Look.dark) Color.hsv(worthHue(worth), 0.78f, 0.46f)
     else Color.hsv(worthHue(worth), 0.32f, 0.97f)
 
-private fun worthHue(worth: Int): Float {
+internal fun worthHue(worth: Int): Float {
     val stops = WORTH_HUES
     val w = worth.toFloat().coerceIn(stops.first().first, stops.last().first)
     val i = stops.indexOfLast { it.first <= w }.coerceAtMost(stops.size - 2)

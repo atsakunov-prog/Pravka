@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Кнопка категории на виджете Засечки, таблеткой: значок слева, название справа — как в меню долгого
+     нажатия «З». Для двух колонок: там ширины хватает на «Передвижение:» в строку. -->
+<!-- Зазор между кнопками — полями рамки (по 3dp с боков), а ряд сдвинут на −3dp: поля через RemoteViews
+     ставятся только с Android 12, а так крайние кнопки ровно по краю. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_cat_box"
+    android:layout_width="0dp"
+    android:layout_height="wrap_content"
+    android:layout_weight="1"
+    android:paddingStart="3dp"
+    android:paddingEnd="3dp">
+
+<LinearLayout
+    android:id="@+id/w_cat"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/widget_tile"
+    android:gravity="center_vertical"
+    android:minHeight="36dp"
+    android:orientation="horizontal"
+    android:paddingStart="10dp"
+    android:paddingTop="5dp"
+    android:paddingEnd="8dp"
+    android:paddingBottom="5dp">
+
+    <ImageView
+        android:id="@+id/w_cat_icon"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:importantForAccessibility="no"
+        android:scaleType="fitCenter" />
+
+    <TextView
+        android:id="@+id/w_cat_text"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:includeFontPadding="false"
+        android:maxLines="2"
+        android:textColor="#FFF2ECE2"
+        android:textSize="12.5sp" />
+</LinearLayout>
+</FrameLayout>

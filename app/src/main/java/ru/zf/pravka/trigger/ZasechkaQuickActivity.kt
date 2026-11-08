@@ -32,10 +32,19 @@ class ZasechkaQuickActivity : Activity() {
         /**
          * «Ещё раз» с виджета: начать сейчас такое же дело, как запись
          * [EXTRA_ENTRY], — то же название, категория, клиент и дело Дел. Без
-         * голоса и без Claude, как касание метки NFC.
+         * голоса и без Claude, как касание метки NFC. С 08.11.2026 виджет этих
+         * кнопок не рисует (их заменили категории); просьба принимается, чтобы
+         * касание по виджету, не перерисованному после обновления, не ушло в тейк.
          */
         const val W_AGAIN = "again"
         const val EXTRA_ENTRY = "entry"
+
+        /**
+         * Кнопка категории на виджете (08.11.2026): «переключить на [EXTRA_CATEGORY]», как в меню долгого
+         * нажатия «З»: идущее закрывается этой минутой, начинается дело с названием категории.
+         */
+        const val W_SWITCH = "switch"
+        const val EXTRA_CATEGORY = "category"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -48,6 +57,15 @@ class ZasechkaQuickActivity : Activity() {
             return
         }
         val service = PravkaAccessibilityService.instance
+        if (what == W_SWITCH) {
+            val cat = intent?.getStringExtra(EXTRA_CATEGORY).orEmpty().trim()
+            // Служба жива — тем же путём, что меню «З» (отметка на кнопке, отклик); нет — лента живёт и без неё.
+            if (cat.isNotEmpty()) {
+                if (service != null) service.switchZasechkaTo(cat) else switchTo(cat)
+            }
+            finish()
+            return
+        }
         if (service == null) {
             Feedback.toast(this, getString(R.string.toast_no_service))
         } else if (what == W_THOUGHT) {
@@ -64,6 +82,22 @@ class ZasechkaQuickActivity : Activity() {
             )
         }
         finish()
+    }
+
+    /** «Переключить на …» без службы: та же запись, что у меню «З» (`switchZasechkaTo`), отклик — всплывашкой. */
+    private fun switchTo(category: String) {
+        val app = application as PravkaApp
+        app.appScope.launch {
+            val now = System.currentTimeMillis()
+            runCatching {
+                app.zasechkaStore.startEntry(now, "", category, category, "", 0, "text")
+            }.onSuccess {
+                Feedback.toast(app, "▶ $category — с " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(now)))
+                app.eventLog.add("виджет: переключено на «$category»")
+            }.onFailure {
+                Feedback.toast(app, "Не переключил на «$category»: ${it.message ?: it.javaClass.simpleName}", long = true)
+            }
+        }
     }
 
     /**

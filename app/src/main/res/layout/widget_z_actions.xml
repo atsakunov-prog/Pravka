@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Виджет Засечки: ряд кнопок — сменить голосом, мысль, еда снимком, из галереи, текстом, «Сегодня». -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/w_actions"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal">
+
+    <LinearLayout android:id="@+id/w_say" style="@style/WidgetKeyBox">
+        <ImageView style="@style/WidgetKey" android:background="@drawable/widget_face" android:src="@drawable/ic_w_mic" android:contentDescription="@string/widget_z_say" />
+        <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_say" />
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/w_thought" style="@style/WidgetKeyBox">
+        <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key" android:src="@drawable/ic_w_idea" android:contentDescription="@string/widget_z_thought" />
+        <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_thought" />
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/w_photo" style="@style/WidgetKeyBox">
+        <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key_food" android:src="@drawable/ic_w_camera" android:contentDescription="@string/widget_z_photo" />
+        <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_photo" />
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/w_gallery" style="@style/WidgetKeyBox">
+        <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key_food" android:src="@drawable/ic_w_image" android:contentDescription="@string/widget_z_gallery" />
+        <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_gallery" />
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/w_text" style="@style/WidgetKeyBox">
+        <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key_food" android:src="@drawable/ic_w_text" android:contentDescription="@string/widget_z_text" />
+        <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_text" />
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/w_today" style="@style/WidgetKeyBox">
+        <ImageView style="@style/WidgetKey" android:background="@drawable/widget_key" android:src="@drawable/ic_w_today" android:contentDescription="@string/widget_z_today" />
+        <TextView style="@style/WidgetKeyLabel" android:text="@string/widget_z_today" />
+    </LinearLayout>
+</LinearLayout>

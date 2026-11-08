@@ -8,10 +8,16 @@ import ru.zf.pravka.data.ZasechkaStore
  * открыть „Сегодня“. Поменять текущее. Ну, короче, всё то, что обычно на
  * виджетах».
  *
+ * 08.11.2026 — «кнопки и лента»: «давай ещё поправим дизайн виджета так, чтобы
+ * там были и кнопки, и ещё была лента». Из трёх вариантов на снимках владелец
+ * выбрал «Пульт» — «А, а вширь — В»: категории плитками (касание —
+ * «переключить на …», как в меню долгого нажатия «З»), полоса суток и
+ * последние куски ленты; растянутый вширь виджет — в две колонки. «Ещё раз»
+ * (три недавних дела) ушло: категории его заменили.
+ *
  * Здесь только решения (под тестом `ZWidgetTest`): что написать про идущее
- * дело, какие недавние дела предложить «ещё раз» одним касанием и сколько
- * всего влезает в размер, который владелец растянул. Рисует и слушает касания
- * `trigger/ZasechkaWidget.kt`.
+ * дело, порядок категорий, лента сегодня и сколько всего влезает в размер,
+ * который владелец растянул. Рисует и слушает касания `trigger/ZasechkaWidget.kt`.
  */
 object ZWidget {
 
@@ -24,39 +30,100 @@ object ZWidget {
         val icon: ZFace.Icon?,
     )
 
-    /** Дело, которое можно начать снова одним касанием. */
-    data class Again(val id: Long, val title: String, val icon: ZFace.Icon?)
-
-    /** Всё, что виджет показывает, кроме минут: минуты считаются на каждом тике. */
-    data class Model(val now: Now?, val again: List<Again>)
+    /** Кнопка категории: касание — «переключить на …», как в меню долгого нажатия «З» ([ZSwitch]). */
+    data class Cat(val name: String, val icon: ZFace.Icon?, val current: Boolean)
 
     /**
-     * Сколько влезает. Высоту лаунчер отдаёт в dp ячеек: одна строка ячеек —
-     * только «что идёт»; две — плюс ряд кнопок; три и выше — ещё и «ещё раз».
-     * Узкий виджет (в две ячейки) кнопки еды не вмещает — там одна кнопка
-     * «сменить», остальное откроется тапом.
+     * Кусок сегодняшней ленты: [from]–[to] обрезаны полуночью, [to] 0 — идёт сейчас (длительность считает
+     * рисовальщик на каждом тике, а модель от тиков не меняется). [gap] — «не размечено».
      */
-    enum class Size { ROW, ACTIONS, FULL }
+    data class Seg(val id: Long, val from: Long, val to: Long, val title: String, val category: String, val gap: Boolean)
 
-    fun size(widthDp: Int, heightDp: Int): Size = when {
-        heightDp < 100 -> Size.ROW
-        heightDp < 170 -> Size.ACTIONS
-        else -> Size.FULL
+    /**
+     * Всё, что виджет показывает, кроме минут: минуты считаются на каждом тике. [cats] — все категории
+     * в порядке «чаще начинаю — выше», [day] — лента сегодня, свежее сверху.
+     */
+    data class Model(
+        val now: Now?,
+        val cats: List<Cat> = emptyList(),
+        val day: List<Seg> = emptyList(),
+    )
+
+    /**
+     * Что влезает в размер виджета. [wide] — две колонки (слева что идёт, категории и кнопки, справа полоса
+     * суток и лента), иначе «Пульт» сверху вниз. [narrow] — уже трёх ячеек: минуты в кружке, еды и «Сегодня»
+     * нет. [cols]×[catRows] — кнопки категорий, [rows] — строки ленты (идущее дело — в шапке, не здесь).
+     */
+    data class Plan(
+        val wide: Boolean,
+        val narrow: Boolean,
+        val cols: Int,
+        val catRows: Int,
+        val rows: Int,
+        val strip: Boolean,
+        val actions: Boolean,
+    ) {
+        val cats: Int get() = cols * catRows
     }
 
-    /** Кнопки еды и «Сегодня» — только если ряд шире двух ячеек. */
-    fun wide(widthDp: Int): Boolean = widthDp >= 220
-
-    private const val AGAIN_MAX = 3
-    private const val AGAIN_WINDOW_MS = 14 * 86_400_000L
+    // Высоты частей в dp — по раскладкам `widget_zasechka*.xml` (поля, шапка, плитка с зазором, полоса суток
+    // с часами, строка ленты, ряд кнопок с подписями). Ошибка в большую сторону — пустое место внизу, в меньшую —
+    // обрезанный низ: числа взяты с запасом по снимкам.
+    private const val PAD = 20
+    private const val HEAD = 46
+    private const val TILE = 68
+    private const val STRIP = 34
+    private const val ROW = 26
+    private const val ROWS_GAP = 8
+    private const val ACTIONS = 66
+    private const val PILL = 46
+    private const val ACTIONS_WIDE = 76
+    private const val STRIP_WIDE = 28
 
     /**
-     * Модель из ленты. «Ещё раз» — последние разные дела за две недели,
-     * сказанные самим владельцем: заполнитель дыры, сон и тренировки с часов
-     * (`auto`) сюда не идут — их не начинают касанием. Идущее дело в списке
-     * не повторяется, одинаковые названия — одной кнопкой (самой свежей).
+     * Раскладка по размеру, который отдал лаунчер (dp; портрет: ширина минимальная, высота максимальная).
+     * Строка ячеек — только «что идёт». Шире 480 и заметно шире, чем выше, — две колонки. Иначе места
+     * раздаются по очереди: ряд кнопок категорий, полоса суток, две строки ленты, ряд кнопок записи, ещё
+     * два ряда категорий, третья строка ленты — дальше ряд категорий и строки ленты, пока есть место.
      */
-    fun model(entries: List<ZasechkaStore.Entry>, now: Long): Model {
+    fun plan(widthDp: Int, heightDp: Int): Plan {
+        val narrow = widthDp < 220
+        if (heightDp < 100) return Plan(false, narrow, 0, 0, 0, strip = false, actions = false)
+        if (widthDp >= 480 && widthDp * 3 >= heightDp * 4) {
+            var left = heightDp - PAD - HEAD - 4
+            var catRows = 0
+            var actions = false
+            if (left >= PILL) { catRows = 1; left -= PILL }
+            if (left >= ACTIONS_WIDE) { actions = true; left -= ACTIONS_WIDE }
+            catRows += (left / PILL).coerceIn(0, 5)
+            val rows = ((heightDp - PAD - STRIP_WIDE - ROWS_GAP) / ROW).coerceIn(0, 12)
+            return Plan(true, false, 2, catRows, rows, strip = true, actions = actions)
+        }
+        // Плитка — не уже 95 dp: «Систематизация» и «Передвижение:» должны влезть в строку целиком.
+        val cols = ((widthDp - 26) / 95).coerceIn(2, 4)
+        var left = heightDp - PAD - HEAD
+        fun take(n: Int): Boolean = (left >= n).also { if (it) left -= n }
+        var catRows = 0
+        var rows = 0
+        var strip = false
+        var actions = false
+        if (take(TILE + 4)) catRows = 1
+        if (catRows == 1 && take(STRIP)) strip = true
+        if (take(ROWS_GAP + 2 * ROW)) rows = 2
+        if (take(ACTIONS)) actions = true
+        while (catRows < 3 && take(TILE)) catRows++
+        if (rows == 2 && take(ROW)) rows = 3
+        if (catRows == 3 && take(TILE)) catRows = 4
+        while (rows in 1..7 && take(ROW)) rows++
+        return Plan(false, narrow, cols, catRows, rows, strip, actions)
+    }
+
+    /**
+     * Модель из ленты и справочника категорий. Кнопки — все категории в порядке
+     * меню «З» ([ZSwitch.order]: чаще начинаю — выше); идущая отмечена (дыра —
+     * не категория, при ней не отмечено ничего).
+     */
+    fun model(entries: List<ZasechkaStore.Entry>, now: Long, categories: List<String> = emptyList()): Model {
         val open = entries.lastOrNull { it.open }
         val nowRow = open?.let {
             Now(
@@ -67,20 +134,50 @@ object ZWidget {
                 icon = ZFace.of(it.category, it.source, it.start).icon,
             )
         }
-        val seen = HashSet<String>()
-        open?.title?.trim()?.lowercase()?.let { seen += it }
-        val again = ArrayList<Again>(AGAIN_MAX)
-        for (e in entries.asReversed()) {
-            if (again.size >= AGAIN_MAX) break
-            if (e.start < now - AGAIN_WINDOW_MS) break
-            if (e.open || e.source == "gap" || e.source == "auto") continue
-            val title = e.title.trim()
-            if (title.isEmpty() || e.category.isBlank()) continue
-            if (e.category.equals("Не размечено", ignoreCase = true)) continue
-            if (!seen.add(title.lowercase())) continue
-            again += Again(e.id, title, ZFace.icon(e.category))
+        val running = open?.takeIf { it.source != "gap" }?.category?.trim().orEmpty()
+        val cats = ZSwitch.order(categories, entries, now).map {
+            Cat(it, ZFace.icon(it), running.isNotEmpty() && it.equals(running, ignoreCase = true))
         }
-        return Model(nowRow, again)
+        return Model(nowRow, cats, today(entries, now))
+    }
+
+    /**
+     * Лента сегодня — с полуночи до «сейчас», свежее сверху, куски обрезаны полуночью. Будущего нет: это лента,
+     * а не план. Закрытые куски короче минуты не рисуются — на виджете это шум.
+     */
+    fun today(entries: List<ZasechkaStore.Entry>, now: Long): List<Seg> {
+        val midnight = midnight(now)
+        val out = ArrayList<Seg>()
+        for (e in entries) {
+            val end = if (e.open) now else e.end
+            if (end <= midnight || e.start >= now) continue
+            val from = maxOf(e.start, midnight)
+            val to = minOf(end, now)
+            if (!e.open && to - from < 60_000L) continue
+            val gap = e.source == "gap" || e.category.trim().equals("Не размечено", ignoreCase = true)
+            val title = e.title.trim().ifBlank { if (gap) "не размечено" else "без названия" }
+            out += Seg(e.id, from, if (e.open) 0L else to, title, e.category.trim(), gap)
+        }
+        return out.sortedByDescending { it.from }
+    }
+
+    /** Полночь суток, в которые попадает [now], по часам телефона. */
+    fun midnight(now: Long): Long = java.util.Calendar.getInstance().apply {
+        timeInMillis = now
+        set(java.util.Calendar.HOUR_OF_DAY, 0)
+        set(java.util.Calendar.MINUTE, 0)
+        set(java.util.Calendar.SECOND, 0)
+        set(java.util.Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    /** Длительность строки ленты: «12 мин», «1 ч 05», «8 ч». */
+    fun dur(ms: Long): String {
+        val m = (ms.coerceAtLeast(0L) / 60_000L).toInt()
+        return when {
+            m < 60 -> "$m мин"
+            m % 60 == 0 -> "${m / 60} ч"
+            else -> "${m / 60} ч ${(m % 60).toString().padStart(2, '0')}"
+        }
     }
 
     /** «Еда · с 14:10» или «Работа: звонки · Бета Групп · с 14:10». */
@@ -99,6 +196,7 @@ object ZWidget {
         else -> "мин"
     }
 
-    private fun hm(ms: Long): String =
+    /** Время «14:10» — начало строки ленты и подпись идущего. */
+    fun hm(ms: Long): String =
         java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 }
