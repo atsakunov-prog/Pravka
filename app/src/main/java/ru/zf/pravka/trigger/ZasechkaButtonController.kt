@@ -30,7 +30,8 @@ import ru.zf.pravka.data.Settings
 // not only in text fields - a timesheet must be reachable from anywhere,
 // including the home screen. Gestures mirror the big button:
 //   short tap  -> record an entry (speak, tap again to stop)
-//   long press -> menu: «Записать мысль», what is running now, open the tab
+//   long press -> menu: what is running, «Записать мысль», «переключить на …» —
+//                 all categories as buttons, most used first (08.11.2026)
 //   drag       -> move; the "П" trails behind on a rubber band (owner's
 //                 design: the two buttons travel as a linked pair)
 // States: idle amber "З" / recording red stop / busy spinner / remind (steady deep amber)
@@ -65,6 +66,12 @@ class ZasechkaButtonController(
         // Тёмная таблетка меню — «Записать мысль»: главный пункт должен
         // читаться первым, не сливаясь с янтарными соседями.
         private val INK = 0xFF5A4A3A.toInt()
+        // Служебный ряд меню (лента, настройки, закрыть): тише и янтаря, и чернил — чтобы не спорил с категориями.
+        private val SOFT = 0xFF8C7B6B.toInt()
+        private const val MENU_GRID_DP = 316
+        private const val MENU_HOLD_MS = 6_000L
+        /** С сеткой категорий — дольше: два десятка кнопок глазами не пробежать за шесть секунд. */
+        private const val MENU_GRID_HOLD_MS = 15_000L
     }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
@@ -624,12 +631,19 @@ class ZasechkaButtonController(
         actions: List<DictationPill.ResultAction> = listOfNotNull(action),
     ) = pill.result(summary, ok, rows, footer, action, onOpen, holdMs, actions = actions, inlineFirst = actions.size > 1)
 
-    // ---- Long-press menu: a single column of amber pills ----
+    // ---- Long-press menu: amber pills, switch grid, service row ----
 
-    /** [accent] — тёмная таблетка: главный пункт, читается первым. */
-    class MenuItem(val label: String, val accent: Boolean = false, val onClick: () -> Unit)
+    /**
+     * [accent] — тёмная таблетка: главный пункт, читается первым. [icon] — значок категории (тот же, что на лице «З»).
+     */
+    class MenuItem(
+        val label: String,
+        val accent: Boolean = false,
+        val icon: ZFace.Icon? = null,
+        val onClick: () -> Unit,
+    )
 
-    private var menu: android.widget.LinearLayout? = null
+    private var menu: View? = null
     private val menuDismiss = Runnable { hideMenu() }
 
     fun hideMenu() {
@@ -639,41 +653,97 @@ class ZasechkaButtonController(
         menu = null
     }
 
-    fun showMenu(items: List<MenuItem>) {
+    private fun menuPill(item: MenuItem, size: Float, fill: Int, padV: Int, center: Boolean = false, padH: Int = 14): TextView =
+        TextView(service).apply {
+            text = item.label
+            setTextColor(PAPER)
+            textSize = size
+            background = BubbleSkin().apply {
+                cornerRadius = dp(18).toFloat()
+                setColor(fill)
+            }
+            alpha = 0.97f
+            if (item.accent) typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            setPadding(dp(padH), dp(padV), dp(padH), dp(padV))
+            if (center) gravity = Gravity.CENTER_VERTICAL
+            item.icon?.let { ic ->
+                // Значок поуже, поля потоньше: «Систематизация» и «Передвижение:» должны влезть в строку целиком,
+                // а не рваться посреди слова.
+                val d = ZFaceGlyphs.drawable(ic, PAPER, scale = 0.95f).apply { setBounds(0, 0, dp(16), dp(16)) }
+                setCompoundDrawables(d, null, null, null)
+                compoundDrawablePadding = dp(5)
+            }
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setOnClickListener {
+                hideMenu()
+                item.onClick()
+            }
+        }
+
+    /** Ряд таблеток поровну: высота ряда — по самой высокой, в две строки подписи переносятся. */
+    private fun menuRow(cells: List<TextView>, columns: Int): android.widget.LinearLayout =
+        android.widget.LinearLayout(service).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            isBaselineAligned = false
+            for ((i, c) in cells.withIndex()) {
+                addView(c, android.widget.LinearLayout.LayoutParams(0, android.widget.LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+                    .apply { if (i > 0) leftMargin = dp(6) })
+            }
+            // Неполный последний ряд не растягивает таблетку на всю ширину.
+            repeat(columns - cells.size) {
+                addView(View(service), android.widget.LinearLayout.LayoutParams(0, 0, 1f).apply { leftMargin = dp(6) })
+            }
+        }
+
+    /**
+     * Меню долгого нажатия. [items] — столбиком сверху, как всегда; [chips] — «переключить на …» сеткой в две колонки
+     * (08.11.2026: все категории ленты, чаще начатые — выше); [tail] — служебное одним рядом внизу. Не модальное
+     * (окно не видит касаний мимо себя): уходит само, а пока палец на нём — ждёт. Выше экрана — прокручивается.
+     */
+    fun showMenu(items: List<MenuItem>, chips: List<MenuItem> = emptyList(), tail: List<MenuItem> = emptyList()) {
         hideMenu()
+        val (w, h) = screenSize()
+        val grid = chips.isNotEmpty()
+        val width = if (grid) minOf(dp(MENU_GRID_DP), w - dp(16)) else android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
         val column = android.widget.LinearLayout(service).apply {
             orientation = android.widget.LinearLayout.VERTICAL
         }
-        for (item in items) {
-            val pill = TextView(service).apply {
-                text = item.label
-                setTextColor(PAPER)
-                textSize = 15f
-                background = BubbleSkin().apply {
-                    cornerRadius = dp(18).toFloat()
-                    setColor(if (item.accent) INK else AMBER)
-                }
-                alpha = if (item.accent) 0.98f else 0.96f
-                if (item.accent) {
-                    typeface = android.graphics.Typeface.create(
-                        android.graphics.Typeface.SANS_SERIF,
-                        android.graphics.Typeface.BOLD,
-                    )
-                    setPadding(dp(16), dp(11), dp(16), dp(11))
-                } else {
-                    setPadding(dp(16), dp(9), dp(16), dp(9))
-                }
-                setOnClickListener {
-                    hideMenu()
-                    item.onClick()
-                }
-            }
-            val lp = android.widget.LinearLayout.LayoutParams(
+        fun add(v: View, full: Boolean) = column.addView(
+            v,
+            android.widget.LinearLayout.LayoutParams(
+                if (full) android.widget.LinearLayout.LayoutParams.MATCH_PARENT else android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = dp(6) }
-            column.addView(pill, lp)
+            ).apply { topMargin = dp(6) },
+        )
+        for (item in items) add(menuPill(item, 15f, if (item.accent) INK else AMBER, if (item.accent) 11 else 9), false)
+        for (row in chips.chunked(2)) {
+            add(menuRow(row.map { menuPill(it, 13f, if (it.accent) INK else AMBER, 7, center = true, padH = 10) }, 2), true)
         }
+        if (tail.isNotEmpty()) add(menuRow(tail.map { menuPill(it, 13f, SOFT, 7, center = true) }, tail.size), true)
+        val hold = if (grid) MENU_GRID_HOLD_MS else MENU_HOLD_MS
+        val maxH = h - dp(16)
+        val scroll = object : android.widget.ScrollView(service) {
+            override fun onMeasure(widthSpec: Int, heightSpec: Int) =
+                super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST))
+
+            // Палец на меню — выбирает или листает: уйти посреди этого было бы подлостью.
+            override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+                removeCallbacks(menuDismiss)
+                postDelayed(menuDismiss, hold)
+                return super.dispatchTouchEvent(ev)
+            }
+        }.apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(column, FrameLayout.LayoutParams(width, FrameLayout.LayoutParams.WRAP_CONTENT))
+        }
+        scroll.measure(
+            View.MeasureSpec.makeMeasureSpec(w - dp(16), View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(maxH, View.MeasureSpec.AT_MOST),
+        )
+        val mw = scroll.measuredWidth
+        val mh = scroll.measuredHeight
         val p = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -682,17 +752,18 @@ class ZasechkaButtonController(
             PixelFormat.TRANSLUCENT,
         ).apply { gravity = Gravity.TOP or Gravity.START }
         val bp = params
-        val (w, h) = screenSize()
         if (bp != null) {
             val buttonCenterX = bp.x + buttonSize / 2
-            p.x = if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8)
-            else (bp.x - dp(170)).coerceAtLeast(0)
-            p.y = bp.y.coerceIn(0, (h - dp(48) * items.size).coerceAtLeast(0))
+            // Сбоку от кнопки, в какую сторону она смотрит; не влезает — прижать к краю экрана.
+            val maxX = (w - mw - dp(8)).coerceAtLeast(0)
+            val maxY = (h - mh - dp(8)).coerceAtLeast(0)
+            p.x = (if (buttonCenterX < w / 2) bp.x + buttonSize + dp(8) else bp.x - dp(8) - mw)
+                .coerceIn(dp(8).coerceAtMost(maxX), maxX)
+            p.y = bp.y.coerceIn(dp(8).coerceAtMost(maxY), maxY)
         }
-        menu = column
-        runCatching { windowManager.addView(column, p) }
-        // Not modal (the overlay can't see outside taps) - fades on its own.
-        column.postDelayed(menuDismiss, 6000)
+        menu = scroll
+        runCatching { windowManager.addView(scroll, p) }
+        scroll.postDelayed(menuDismiss, hold)
     }
 
     // ---- «Всё ещё …?»: вопрос строкой пилюли сверху ----

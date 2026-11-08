@@ -634,11 +634,57 @@ internal fun PravkaAccessibilityService.showZasechkaMenu() {
             },
             onClick = goTab,
         )
+        // «Переключить на …» (08.11.2026, владелец: «пускай там будет список, на что сейчас можно переключить…
+        // отсортируй по тому, насколько я часто что-то делаю… все категории»): кнопка на каждую категорию, чаще
+        // начатые за месяц — выше (`core/ZSwitch.kt`). Идущая — тёмной таблеткой с точкой: место в сетке не прыгает.
+        val cats = runCatching { app.zasechkaStore.categories().map { it.name } }.getOrDefault(emptyList())
+        val recent = runCatching {
+            app.zasechkaStore.forRange(now - ru.zf.pravka.core.ZSwitch.DAYS * 24L * 60 * 60 * 1000, now)
+        }.getOrDefault(emptyList())
+        val order = kotlinx.coroutines.withContext(Dispatchers.Default) { ru.zf.pravka.core.ZSwitch.order(cats, recent, now) }
+        val running = open?.category?.trim().orEmpty()
+        val chips = order.map { cat ->
+            val here = cat.equals(running, ignoreCase = true)
+            ZasechkaButtonController.MenuItem(
+                if (here) "● $cat" else cat,
+                accent = here,
+                icon = ru.zf.pravka.core.ZFace.icon(cat),
+            ) { if (!here) switchZasechkaTo(cat) }
+        }
         // Помидоров здесь больше нет: владелец ими не пользовался, а место
         // сверху занял тот пункт, которым он пользоваться собирается.
-        val prefs = ZasechkaButtonController.MenuItem("Настройки") { openSettingsTab("ZASECHKA") }
-        val close = ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() }
-        zButton?.showMenu(listOfNotNull(thought, header, openTab, prefs, close))
+        val tail = listOf(
+            ZasechkaButtonController.MenuItem("Лента", onClick = goTab),
+            ZasechkaButtonController.MenuItem("Настройки") { openSettingsTab("ZASECHKA") },
+            ZasechkaButtonController.MenuItem("Закрыть") { zButton?.hideMenu() },
+        )
+        if (chips.isEmpty()) zButton?.showMenu(listOfNotNull(thought, header, openTab) + tail)
+        else zButton?.showMenu(listOfNotNull(thought, header), chips, tail)
+    }
+}
+
+/**
+ * «Переключить на …» с меню «З» (08.11.2026): идущее дело закрывается сейчас, начинается [category] — названием
+ * служит сама категория (уточнить можно голосом). Тем же путём, что «Начать» из веба: `startEntry` пишет ленту и
+ * отдаёт правку серверу; без сети — очередь Дел.
+ */
+internal fun PravkaAccessibilityService.switchZasechkaTo(category: String) {
+    scope.launch {
+        val now = System.currentTimeMillis()
+        val entry = runCatching {
+            app.zasechkaStore.startEntry(
+                start = now, raw = "", title = category, category = category, client = "", useful = 0, source = "text",
+            )
+        }.getOrElse { e ->
+            app.eventLog.add("засечка: переключение на «$category» не вышло — ${e.javaClass.simpleName}: ${e.message}")
+            Haptics.error(this@switchZasechkaTo)
+            zButton?.showNote("Не переключил на «$category»: ${e.message ?: e.javaClass.simpleName}", ok = false, holdMs = 4_000)
+            return@launch
+        }
+        zButton?.setRemind(false)
+        app.eventLog.add("засечка: кнопкой — «${entry.title}» с ${zTime(entry.start)}")
+        Haptics.success(this@switchZasechkaTo)
+        zButton?.showNote("▶ «${entry.title}» с ${zTime(entry.start)}")
     }
 }
 
