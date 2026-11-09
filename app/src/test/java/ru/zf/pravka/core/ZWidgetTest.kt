@@ -104,6 +104,9 @@ class ZWidgetTest {
         // 4×2: сначала категории и полоса, кнопкам записи места нет; в 320 dp — три плитки в ряд.
         assertEquals(ZWidget.Plan(false, false, 2, 1, 0, strip = true, actions = false), ZWidget.plan(250, 180))
         assertEquals(3, ZWidget.plan(320, 180).cols)
+        // Внутренний экран складного (снимок владельца 09.11.2026, ~397×608): четыре ряда категорий, полоса, пять
+        // строк ленты и кнопки — и всё это в высоту виджета с запасом под крупный шрифт.
+        assertEquals(ZWidget.Plan(false, false, 3, 4, 5, strip = true, actions = true), ZWidget.plan(397, 608))
         // Две ячейки шириной: минуты в кружке, плитки всё равно по две.
         val narrow = ZWidget.plan(180, 300)
         assertTrue(narrow.narrow)

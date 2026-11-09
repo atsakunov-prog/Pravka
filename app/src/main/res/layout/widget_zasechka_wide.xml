@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Виджет Засечки, растянутый вширь (08.11.2026, владелец: «А, а вширь — В»): слева что идёт, категории
      таблетками и ряд кнопок, справа полоса суток и лента почти на весь день. Когда он такой —
-     `core/ZWidget.plan` (шире 480 dp и заметно шире, чем выше). -->
+     `core/ZWidget.plan` (шире 480 dp и заметно шире, чем выше). Категории слева забирают остаток высоты,
+     ряд кнопок — внизу колонки: не хватило места — обрежутся таблетки, а не кнопки. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/w_root"
     android:layout_width="match_parent"
@@ -27,8 +28,9 @@
         <LinearLayout
             android:id="@+id/w_cats"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="0dp"
             android:layout_marginTop="4dp"
+            android:layout_weight="1"
             android:orientation="vertical" />
 
         <include

@@ -3,7 +3,8 @@
      (кружок «З» — тейк, текст — лента), полоса суток, категории плитками по частоте (касание — «переключить
      на …»), последние куски ленты, ряд кнопок: сменить голосом, мысль, еда снимком, из галереи, текстом,
      «Сегодня». Что видно и сколько — решает размер (`core/ZWidget.plan`); растянутый вширь —
-     `widget_zasechka_wide.xml`. Тексты по умолчанию — для превью в списке виджетов. -->
+     `widget_zasechka_wide.xml`. Тексты по умолчанию — для превью в списке виджетов. Лента забирает остаток
+     высоты (вес 1), ряд кнопок — всегда внизу: не хватило места — обрежется лента, а не кнопки. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/w_root"
     android:layout_width="match_parent"
@@ -36,8 +37,9 @@
     <LinearLayout
         android:id="@+id/w_rows"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="0dp"
         android:layout_marginTop="8dp"
+        android:layout_weight="1"
         android:orientation="vertical" />
 
     <include
