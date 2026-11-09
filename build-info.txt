@@ -1,0 +1,7 @@
+pravka=3.0.906
+versionName=3.0.906
+apk=pravka-debug.apk
+versionCode=906
+commit=adb1d1270730e22510721be628900462368ada67
+branch=pravka
+builtAt=2026-11-09T16:11Z
