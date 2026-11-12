@@ -221,9 +221,18 @@ def _gender_clash(qw: list[str], nw: list[str]) -> bool:
 
 
 def _first_only(q: str) -> bool:
-    """Запрос — одно имя («Дмитрий», «Женя»)."""
+    """Запрос — одно имя («Дмитрий», «Женя», «Глеб»).
+
+    По looks_first, а не is_first (12.11.2026): справочник FIRST_NAMES собран из уменьшительных, и «Глеб», «Кирилл»,
+    «Марина» в нём нет — спикер «Глеб (Ромашка)» с подтверждённой компанией получал 0,8 вместо 0,9 и не узнавался.
+    Здесь это только порог одного имени с компанией; как слово запроса сверяется с карточкой, решает is_first."""
     ws = words(q)
-    return len(ws) == 1 and is_first(ws[0])
+    return len(ws) == 1 and looks_first(ws[0])
+
+
+def _label(s: Any) -> tuple[str, ...]:
+    """Подпись словами, без скобок и знаков: «Глеб (Ромашка)» и «Глеб(Ромашка)» — одна подпись."""
+    return tuple(words(s))
 
 
 def phone_key(s: Any) -> str | None:
@@ -408,9 +417,14 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
     rows = who_rows(conn, with_merged=keyed) if rows is None else rows
     live = [p for p in rows if not p.get("merged_into")]
     q_name, hint = split_hint(q or "")
+    # Подпись целиком, со скобкой (12.11.2026): «Глеб (Ромашка)» записан карточке именем или другим именем — так его
+    # назвал владелец у спикера, и досье дописало это имя карточке. Это совпадение имени, а не догадка по подсказке.
+    labels = set()
+    if hint:
+        labels = {_label(q)} | ({_label(translit(q))} if re.search(r"[a-z]", norm(q)) else set())
     scored = []
     for p in live:
-        s, how, alias_only = 0.0, _key_how(p, pk, telegram_id, tg_user, mail), False
+        s, how, alias_only, fit = 0.0, _key_how(p, pk, telegram_id, tg_user, mail), False, 0
         if how:
             s = 1.0
         else:
@@ -418,6 +432,10 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
             if re.search(r"[a-z]", q_name):
                 o2, a2 = _name_parts(translit(q_name), p)  # подпись из Zoom латиницей
                 own, alias = max(own, o2), max(alias, a2)
+            if labels and any(_label(x) in labels for x in (p["name"], p["short"]) if x):
+                own = 1.0
+            elif labels and any(_label(x) in labels for x in p["aliases"] or [] if x):
+                alias = 1.0
             s, alias_only = max(own, alias), alias > own
             # how: «имя» — совпало своё имя или короткое имя карточки, «другое имя» — только её aliases.
             how = ("другое имя" if alias_only else "имя") if s >= 0.95 else "похоже"
@@ -428,11 +446,11 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
                 # компания — слабее; компании нет — подсказке не с чем спорить («Анна Смирнова
                 # (Цветочная лавка)» — это она).
                 if _hint_hit(hint, orgs + [p["role"] or ""]) or _hint_hit(translit(hint), orgs + [p["role"] or ""]):
-                    s = max(min(1.0, s + 0.2), 0.9 if _first_only(q_name) else 0.0)
+                    s, fit = max(min(1.0, s + 0.2), 0.9 if _first_only(q_name) else 0.0), 1
                 elif orgs and not _kin(hint):
-                    s = min(s - 0.15, HINT_CAP)  # чужая компания — кандидат, не «уверенно» (п. 6 этапа 6, HINT_CAP)
+                    s, fit = min(s - 0.15, HINT_CAP), -1  # чужая компания — кандидат, не «уверенно» (п. 6 этапа 6)
         if s > 0.3:
-            scored.append((round(s, 2), how, alias_only, p))
+            scored.append((round(s, 2), how, alias_only, p, fit))
     if keyed:
         # Ключ слитого дубля — его живая карточка (№23), если она видна и своим ключом уже не совпала.
         by_id = {str(p["id"]): p for p in live}
@@ -442,21 +460,25 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
             if target is None or str(target["id"]) in hit or not _key_how(p, pk, telegram_id, tg_user, mail):
                 continue
             scored = [t for t in scored if str(t[3]["id"]) != str(target["id"])]
-            scored.append((1.0, MERGED_HOW, False, target))
+            scored.append((1.0, MERGED_HOW, False, target, 0))
             hit.add(str(target["id"]))
-    # При равных баллах своё имя — впереди чужого другого имени; дальше по имени и id — порядок не зависит от того, как
-    # база отдала строки (кнопки «Кто это — X или Y?» не должны прыгать от запроса к запросу).
-    scored.sort(key=lambda t: (-t[0], t[2], norm(t[3]["name"]), str(t[3]["id"])))
+    # При равных баллах своё имя — впереди чужого другого имени, компания из скобок — впереди чужой; дальше по имени и id —
+    # порядок не зависит от того, как база отдала строки (кнопки «Кто это — X или Y?» не должны прыгать).
+    scored.sort(key=lambda t: (-t[0], t[2], -t[4], norm(t[3]["name"]), str(t[3]["id"])))
     cands = [
         {"id": p["id"], "name": p["name"], "short": p["short"], "org": p["org_name"], "role": p["role"],
          "user_id": p["user_id"], "score": s, "how": how}
-        for s, how, _, p in scored[:limit]
+        for s, how, _, p, _ in scored[:limit]
     ]
     sure = False
     if scored and scored[0][0] >= SURE:
-        rivals = [t for t in scored[1:] if scored[0][0] - t[0] < GAP]
-        # Развязка (№1): лучший совпал своим name или short, а все, кто рядом, — только своим другим именем.
-        sure = not rivals or (scored[0][1] == "имя" and all(t[2] for t in rivals))
+        top = scored[0]
+        rivals = [t for t in scored[1:] if top[0] - t[0] < GAP]
+        # Развязки — соперник рядом уступает лучшему родом совпадения:
+        # №1 — лучший совпал своим name или short, соперник — только своим другим именем;
+        # 12.11.2026 — компанию из скобок лучший подтвердил, а соперник с ней спорит: «Глеб (Ромашка)» при карточке
+        # «Глеб» из другой компании (0,8, HINT_CAP) — это не тот Глеб, а не повод сомневаться в том, что из Ромашки.
+        sure = all((top[1] == "имя" and t[2]) or (top[4] > 0 and t[4] < 0) for t in rivals)
     return {"best": cands[0] if cands else None, "sure": sure, "candidates": cands, "hint": hint or None}
 
 
@@ -473,8 +495,9 @@ NEW_ASK_MAX = 2  # «Это X» кнопками: два кандидата, «�
 NEW_SAY_MAX = 5  # похожих больше NEW_ASK_MAX — вопрос словами с этими именами, ответ — Claude (set.person_id)
 # «Хоть одно слово — имя» для нового человека: FIRST_NAMES собран из уменьшительных (около ста имён) — «Кирилл Иванов»,
 # «Марина Орлова» и «Глеб Соколов» по нему не люди, и каждое такое имя со встречи стало бы вопросом. Здесь — частые
-# полные имена сверх него. Только для этой проверки: в who FIRST_NAMES отделяет имя от фамилии, и расширять его — менять
-# баллы узнавания (проверка 15.10: «Кирилл Иванов» против «Кирилл Петров» — 0,5, а с «кирилл» в FIRST_NAMES стало бы 0).
+# полные имена сверх него. Не в FIRST_NAMES: в who он отделяет имя от фамилии, и расширять его — менять баллы узнавания
+# (проверка 15.10: «Кирилл Иванов» против «Кирилл Петров» — 0,5, а с «кирилл» в FIRST_NAMES стало бы 0). В who это
+# множество решает одно — порог «одно имя с подтверждённой компанией» (_first_only, 12.11.2026).
 MORE_FIRST = frozenset("""
 кирилл никита егор денис глеб марк матвей руслан артур ярослав филипп леонид аркадий всеволод даниил данила богдан
 тихон савва захар мирон лука елисей платон степан макар ростислав родион демид давид эмиль ренат рустам марат виталий
