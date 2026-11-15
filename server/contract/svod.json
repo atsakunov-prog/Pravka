@@ -83,7 +83,7 @@
    ],
    "create": {"name": "Творчество", "sub": "создаю новое", "items": [{"key": "claude", "name": "Claude", "icon": "claude"}]}
   },
-  "look_factory": {"v": 1, "light": {"accent": "#2747c9", "accent-ink": "#ffffff", "accent-soft": "#e9edfb", "info": "#2747c9"}, "dark": {"accent": "#93abf8", "accent-ink": "#141414", "accent-soft": "#252c47", "info": "#93abf8"}},
+  "look_factory": {"v": 1, "light": {"accent": "#2747c9", "accent-ink": "#ffffff", "accent-soft": "#e9edfb", "info": "#2747c9"}, "dark": {"accent": "#ffb347", "accent-ink": "#1d1206", "accent-soft": "#3a2a16", "info": "#8fb0ff"}},
   "me_example": {"look": {"domain": "example.org", "icon": "data:image/svg+xml;base64,…", "icon_png": "", "nav": [{"name": "Дом", "icon": "home", "url": "https://home.example.org/", "key": "dom"}, {"name": "Дела", "icon": "dela", "url": "/", "key": "dela"}], "menu": "ui.menu владельца (только ему) — устроено как menu_factory", "tokens": {"light": {"accent": "#2747c9"}, "dark": {"accent": "#93abf8"}}, "pages": ["day", "zasechka", "pravka"]}},
   "pages": "look.pages (только владельцу) — страницы-двойники веба Дел, которые этот сервер умеет: day (#/day), zasechka (#/zasechka), pravka (#/pravka) — список kovcheg_ui.PAGES. Большие кнопки меню today / zasechka / pravka в вебе (Дела и страницы компа) ведут туда, только если страница в списке; нет — кнопки в вебе нет. На телефоне большие кнопки — экраны приложения, список им не нужен.",
   "dom_token": "Сборщик «Дома» (ZF-Home-Collector): токен службы dom — GET /api/view/svod только с ключами ui.* и GET /api/me (ради look.pages); операции, синк, люди — 403. Выдаёт install-dela.ps1 (шаг «Встречи и «Дом»»)."

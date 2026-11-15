@@ -927,14 +927,28 @@ const KV = {
     KV.setCookie(name, value);
     try { if (value) localStorage.setItem(name, value); else localStorage.removeItem(name); } catch (e) { /* хватит куки */ }
   },
-  chosen() { const t = KV.pref('kv-theme'); return t === 'light' || t === 'dark' ? t : ''; },
+  // 16.11.2026: по умолчанию — ночь (версия 3 общего слоя). Выбор — кука kv-look: пусто — ночь, light, auto. Прежнюю
+  // kv-theme не читаем нарочно: в ней мог остаться давний выбор «светлая» (и её же ставит приложение Правки).
+  chosen() { const t = KV.pref('kv-look'); return t === 'light' || t === 'auto' ? t : ''; },
+  resolved() { const c = KV.chosen(); return c === 'light' ? 'light' : c === 'auto' && KV.dark && !KV.dark.matches ? 'light' : 'dark'; },
   dark: window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null,
-  theme() { return HTML.getAttribute('data-theme') || (KV.dark && KV.dark.matches ? 'dark' : 'light'); },
-  /** t: 'light' | 'dark' | '' — пусто значит «как в системе». */
+  theme() { return HTML.getAttribute('data-theme') || 'dark'; },
+  /** t: 'light' | 'dark' | 'auto' (как в системе) | '' (= ночь). Внутри приложения Правки KV.setTheme зовёт само
+   *  приложение темой телефона (ServiceWeb.themeScript): там вызов ничего не меняет — ночь не перебивается. */
   setTheme(t) {
-    KV.store('kv-theme', t);
-    if (t) HTML.setAttribute('data-theme', t); else HTML.removeAttribute('data-theme');
+    if (HTML.getAttribute('data-kv-app')) return;
+    KV.store('kv-look', t === 'light' || t === 'auto' ? t : '');
+    HTML.setAttribute('data-theme', KV.resolved());
+    if (KV.resolved() === 'dark') KV.display();
     paintLook();
+  },
+  /** Крупные заголовки ночью — Literata (как «Среда» и «+84» Правки 4.0); CSP Дел пускает стили и шрифты Google. */
+  display() {
+    if (document.getElementById('kv-font-display') || !document.head) return;
+    const l = document.createElement('link');
+    l.id = 'kv-font-display'; l.rel = 'stylesheet';
+    l.href = 'https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,600&display=swap';
+    document.head.appendChild(l);
   },
   setPattern(on) { KV.store('kv-pattern', on ? '' : 'off'); paintLook(); },
   /** Остальной выбор вида: KV.set('font' | 'size' | 'pcolor' | 'pdens' | 'theme', id). */
@@ -948,7 +962,9 @@ const KV = {
     paintLook();
   },
 };
-if (KV.chosen()) HTML.setAttribute('data-theme', KV.chosen());
+HTML.setAttribute('data-theme', KV.resolved());
+if (KV.resolved() === 'dark') KV.display();
+if (KV.dark && KV.dark.addEventListener) KV.dark.addEventListener('change', () => { if (KV.chosen() === 'auto') { HTML.setAttribute('data-theme', KV.resolved()); paintLook(); } });
 // Внутри приложения Правки (14.10.2026): телефон открывает страницы сервисов у себя (WebView) под своей шапкой
 // Ковчега — значок с меню, название, тема; веб Дел туда попадает ссылкой с другой страницы (плитка «Дома»). Своя
 // шапка здесь была бы второй такой же строкой. WebView Правки дописывает в User-Agent метку PravkaApp — по ней
@@ -973,12 +989,12 @@ const SIZES = [['s', 'Мельче', 0.92, 12], ['m', 'Обычный', 1, 14], 
 // Цвет узора: [id, название, светлая, тёмная, прозрачность в светлой, в тёмной]. Цветной чуть плотнее серого, иначе на
 // тёплом фоне его не видно вовсе.
 const PCOLORS = [
-  ['orange', 'Оранжевый', '#d9692c', '#f0a06a', 0.17, 0.16],
-  ['gray', 'Серый', '#1c1b19', '#eceae5', 0.08, 0.07],
-  ['blue', 'Синий', '#2747c9', '#93abf8', 0.13, 0.15],
-  ['green', 'Зелёный', '#2f7d4f', '#7cc59a', 0.15, 0.15],
-  ['lilac', 'Сиреневый', '#7a5cc7', '#b9a3f5', 0.15, 0.15],
-  ['pink', 'Розовый', '#c2477a', '#e58cbc', 0.14, 0.15],
+  ['orange', 'Оранжевый', '#d9692c', '#f0a06a', 0.17, 0.10], // ночью тише (16.11): поверх узора — свет сверху
+  ['gray', 'Серый', '#1c1b19', '#eceae5', 0.08, 0.05],
+  ['blue', 'Синий', '#2747c9', '#93abf8', 0.13, 0.10],
+  ['green', 'Зелёный', '#2f7d4f', '#7cc59a', 0.15, 0.10],
+  ['lilac', 'Сиреневый', '#7a5cc7', '#b9a3f5', 0.15, 0.10],
+  ['pink', 'Розовый', '#c2477a', '#e58cbc', 0.14, 0.10],
 ];
 const DENS = [['rare', 'Реже', 160], ['mid', 'Обычно', 120], ['dense', 'Гуще', 96]]; // шаг сетки, плитка 960
 const OPTS = { // что: [кука, список, значение по умолчанию]
@@ -1664,8 +1680,8 @@ function prefsMenu() {
   pat.addEventListener('change', () => KV.setPattern(pat.checked));
   const menu = el('div', { class: 'kv-menu', role: 'dialog', 'aria-label': 'Настройки вида', hidden: true },
     el('div', { class: 'kv-menu-h' }, 'Тема'),
-    seg([item('theme', 'light', [icon('sun', 15), el('span', {}, 'Светлая')]), item('theme', 'dark', [icon('moon', 15), el('span', {}, 'Тёмная')]),
-      item('theme', '', [icon('monitor', 15), el('span', {}, 'Авто')], 'Как в системе')]),
+    seg([item('theme', 'light', [icon('sun', 15), el('span', {}, 'Светлая')]), item('theme', '', [icon('moon', 15), el('span', {}, 'Ночь')]),
+      item('theme', 'auto', [icon('monitor', 15), el('span', {}, 'Авто')], 'Как в системе')]),
     el('div', { class: 'kv-menu-h' }, 'Размер текста'), seg(sizes),
     el('div', { class: 'kv-menu-h' }, 'Шрифт'), el('div', { class: 'kv-fonts', role: 'radiogroup' }, fonts),
     el('div', { class: 'kv-menu-sep' }), el('label', { class: 'check' }, pat, el('span', {}, 'Узор на фоне')),

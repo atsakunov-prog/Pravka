@@ -1,5 +1,6 @@
 // Боковая панель Todoist: я и колокольчик, «Добавить задачу», Поиск, виды, Избранное, наше «Дерево жизни»,
 // «Мои проекты» (клиенты, под ними сделки — подпроекты), внизу — CRM и старый веб.
+import { applyLook, lookChoice } from '../look.ts';
 import { setDue, setPlace } from './acts.ts';
 import { useEffect, useState } from 'react';
 import { dealShort, go, initials, projectColor, useRoute } from '../lib.ts';
@@ -157,12 +158,11 @@ function SideSearch() {
 }
 
 function MeMenu({ close }: { close: () => void }) {
-  const cur = document.documentElement.dataset.theme || 'system';
+  const cur = lookChoice();
   const acc = document.documentElement.dataset.accent || 'todoist';
   const theme = (t: string) => {
-    if (t === 'system') delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = t;
-    try { localStorage.setItem('todo.theme', t); } catch { /* */ }
+    try { localStorage.setItem('todo.look', t); } catch { /* */ }
+    applyLook();
     close();
   };
   const accent = (a: string) => {
@@ -178,7 +178,7 @@ function MeMenu({ close }: { close: () => void }) {
       <button className="mi" onClick={() => { close(); go('done'); }}><Icon name="done" size={18} />Выполнено</button>
       <div className="msep" />
       <div className="mh">Тема</div>
-      {[['system', 'Как в системе', 'sliders'], ['light', 'Светлая', 'sun'], ['dark', 'Тёмная', 'moon']].map(([k, w, ic]) => (
+      {[['dark', 'Ночь', 'moon'], ['light', 'Светлая', 'sun'], ['system', 'Как в системе', 'sliders']].map(([k, w, ic]) => (
         <button key={k} className={'mi' + (cur === k ? ' act' : '')} onClick={() => theme(k)}><Icon name={ic} size={18} />{w}</button>
       ))}
       <div className="mh">Цвет</div>

@@ -12,32 +12,23 @@
   font-weight: 400 900; font-style: normal; font-display: swap;
 }
 
+/* Ночь — по умолчанию (16.11.2026, версия 3 общего слоя, вариант Б холста «Ковчег ночью»: владелец скучал по тёмной
+   Засечке Правки 4.0). Тёплый почти чёрный фон, свет сверху (крем и синий Дел), янтарный акцент, категории — ярко и
+   разными тонами. Светлая версии 2 — data-theme="light" ниже. app.js ставит data-theme всегда; выбор — кука kv-look
+   (пусто — ночь, light, auto). Копия общего слоя (ui\kovcheg.css «Дома» на компе владельца). */
 :root {
-  --bg: #f6f4ef;
-  --side: #f1eee8;
-  --panel: #ffffff;
-  --panel-2: #f3f1ec;
-  --hover: rgba(28, 27, 25, .045);
-  --hover-2: rgba(28, 27, 25, .08);
-  --line: #e6e2d9;
-  --line-soft: #eeebe4;
-  --text: #1c1b19;
-  --muted: #5f5b53;
-  --faint: #77736a;
-  --icon: #77736a;
-  --check: #a19c92;
-  --sep: #b9b4aa;
-  --ok: #2f7d4f;
-  --warn: #9a5b00;
-  --bad: #b42318;
-  --accent: #2747c9;
-  --accent-ink: #ffffff;
-  --accent-soft: #e9edfb;
-  --bar-fill: #3a3833;
-  /* «Чей это» (кто говорит во встрече) — восемь спокойных цветов текста, читаемых на белом и на фоне. */
-  --sp0: #2747c9; --sp1: #9a5b00; --sp2: #2f7d4f; --sp3: #a23b72; --sp4: #0e7490; --sp5: #6d4fc4; --sp6: #b4461f; --sp7: #5f5b53;
-  --shadow: 0 10px 28px rgba(60, 50, 30, .12);
+  --bg: #12110f; --side: #161512; --panel: #1b1916; --panel-2: #221f1b;
+  --hover: rgba(255, 240, 220, .045); --hover-2: rgba(255, 240, 220, .085);
+  --line: #2d2a25; --line-soft: #25221e;
+  --text: #f0eadf; --muted: #c9b9a2; --faint: #a08c74; --icon: #b3a28c; --check: #7d6d5b; --sep: #5a5046;
+  --ok: #8fd1a8; --warn: #f2b65c; --bad: #f08a7e;
+  --accent: #ffb347; --accent-ink: #1d1206; --accent-soft: #3a2a16; --bar-fill: #c9b9a2;
+  /* Категории ленты и «чей это»: Работа sp0, Быт sp1, Спорт sp2, Семья sp3, Отдых sp4, Систематизация sp5, Еда sp6,
+     Сон и прочее sp7. */
+  --sp0: #8fb0ff; --sp1: #f2b65c; --sp2: #7fd6a4; --sp3: #ff92c2; --sp4: #63d2e8; --sp5: #b79cff; --sp6: #ff9d66; --sp7: #b4ad9f;
+  --shadow: 0 14px 34px rgba(0, 0, 0, .55);
   --font: "Golos Text", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "SF Pro Text", Roboto, sans-serif;
+  --font-display: Literata, Georgia, "Times New Roman", serif;
   --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
   --side-w: 264px;
   --card-w: 36%;
@@ -49,40 +40,32 @@
   --tint: var(--accent);
   --claude: var(--accent);
   --now: var(--accent);
-  color-scheme: light;
-}
-/* Тёмная: по системе, если светлую не выбрали явно, и всегда — если выбрали тёмную. Значения повторены дважды:
-   CSS не умеет «или» между media и атрибутом. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme=light]) {
-    --bg: #161513; --side: #1a1917; --panel: #1f1e1b; --panel-2: #262521;
-    --hover: rgba(255, 250, 240, .04); --hover-2: rgba(255, 250, 240, .075);
-    --line: #2e2c28; --line-soft: #282622;
-    --text: #eceae5; --muted: #b3afa6; --faint: #8f8b82; --icon: #9c988f; --check: #6e6a62; --sep: #55524c;
-    --ok: #7cc59a; --warn: #e3a957; --bad: #f08a7e;
-    --accent: #93abf8; --accent-ink: #141414; --accent-soft: #252c47; --bar-fill: #b3afa6;
-    --sp0: #93abf8; --sp1: #e3a957; --sp2: #7cc59a; --sp3: #e58cbc; --sp4: #67c3d8; --sp5: #b9a3f5; --sp6: #ec9c74; --sp7: #b3afa6;
-    --shadow: 0 12px 32px rgba(0, 0, 0, .45);
-    color-scheme: dark;
-  }
-}
-:root[data-theme=dark] {
-  --bg: #161513; --side: #1a1917; --panel: #1f1e1b; --panel-2: #262521;
-  --hover: rgba(255, 250, 240, .04); --hover-2: rgba(255, 250, 240, .075);
-  --line: #2e2c28; --line-soft: #282622;
-  --text: #eceae5; --muted: #b3afa6; --faint: #8f8b82; --icon: #9c988f; --check: #6e6a62; --sep: #55524c;
-  --ok: #7cc59a; --warn: #e3a957; --bad: #f08a7e;
-  --accent: #93abf8; --accent-ink: #141414; --accent-soft: #252c47; --bar-fill: #b3afa6;
-  --sp0: #93abf8; --sp1: #e3a957; --sp2: #7cc59a; --sp3: #e58cbc; --sp4: #67c3d8; --sp5: #b9a3f5; --sp6: #ec9c74; --sp7: #b3afa6;
-  --shadow: 0 12px 32px rgba(0, 0, 0, .45);
+  --kv-glow: radial-gradient(40% 80% at 8% -6%, rgba(255, 214, 160, .26), transparent 70%),
+    radial-gradient(44% 86% at 93% -8%, rgba(111, 163, 204, .32), transparent 70%);
   color-scheme: dark;
+}
+/* Светлая — версия 2 (13.10.2026). */
+:root[data-theme=light] {
+  --bg: #f6f4ef; --side: #f1eee8; --panel: #ffffff; --panel-2: #f3f1ec;
+  --hover: rgba(28, 27, 25, .045); --hover-2: rgba(28, 27, 25, .08);
+  --line: #e6e2d9; --line-soft: #eeebe4;
+  --text: #1c1b19; --muted: #5f5b53; --faint: #77736a; --icon: #77736a; --check: #a19c92; --sep: #b9b4aa;
+  --ok: #2f7d4f; --warn: #9a5b00; --bad: #b42318;
+  --accent: #2747c9; --accent-ink: #ffffff; --accent-soft: #e9edfb; --bar-fill: #3a3833;
+  --sp0: #2747c9; --sp1: #9a5b00; --sp2: #2f7d4f; --sp3: #a23b72; --sp4: #0e7490; --sp5: #6d4fc4; --sp6: #b4461f; --sp7: #5f5b53;
+  --shadow: 0 10px 28px rgba(60, 50, 30, .12);
+  --font-display: var(--font);
+  --kv-glow: none;
+  color-scheme: light;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 html { -webkit-text-size-adjust: 100%; }
 /* Фон и узор — на <html>, body прозрачный: свой фон у body закрыл бы узор (app.js кладёт его в --kv-pattern). */
-html { background-color: var(--bg); background-image: var(--kv-pattern, none); background-size: 960px 960px; }
+html { background-color: var(--bg); background-image: var(--kv-glow), var(--kv-pattern, none);
+  background-size: 100% 680px, 100% 680px, 960px 960px; background-repeat: no-repeat, no-repeat, repeat; }
+:root[data-theme=light] { background-size: 960px 960px; background-repeat: repeat; }
 html, body { margin: 0; color: var(--text); height: 100%; }
 /* Размер текста из шестерёнки — масштабом всей страницы (zoom у body). Высоты в vh ниже поделены на него: vh под
    zoom растёт вместе со страницей, и лист карточки или окно Claude вылезали бы за экран. */
@@ -270,8 +253,7 @@ html[data-kv-app] .top { display: none; }
 }
 .kv-sw:hover { box-shadow: 0 0 0 1px var(--check); }
 .kv-sw.on, .kv-sw.on:hover { box-shadow: 0 0 0 2px var(--accent); }
-@media (prefers-color-scheme: dark) { :root:not([data-theme=light]) .kv-sw { background: var(--sw-d); } }
-:root[data-theme=dark] .kv-sw { background: var(--sw-d); }
+:root:not([data-theme=light]) .kv-sw { background: var(--sw-d); }
 .kv-out { color: var(--icon); }
 
 /* ── Каркас: колонка разделов · страница · карточка ── */

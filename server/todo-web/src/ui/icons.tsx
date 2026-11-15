@@ -61,6 +61,10 @@ const P: Record<string, string> = {
   sync: 'M19.5 12a7.5 7.5 0 0 1-13 5.1M4.5 12a7.5 7.5 0 0 1 13-5.1M17.5 3.5v3.6h-3.6M6.5 20.5v-3.6h3.6',
   stop: 'M8 8h8v8H8z',
   star: 'M12 4.5l2.3 4.7 5.2.8-3.8 3.7.9 5.2-4.6-2.4-4.6 2.4.9-5.2-3.8-3.7 5.2-.8z',
+  // Полоса дня (16.11.2026): плашки Спорт, Еда, Деньги — те же знаки, что у общего вида Ковчега.
+  activity: 'M3 12h4l3-7 4 14 3-7h4',
+  food: 'M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 0-3.5 3-3.5 7H17',
+  ruble: 'M8 20V4h5a4 4 0 0 1 0 8H6M6 16h8',
 };
 
 export function Icon({ name, size = 24, style, sw = 1.5, title }: { name: string; size?: number; style?: CSSProperties; sw?: number; title?: string }): ReactElement {

@@ -311,8 +311,6 @@ export function App() {
       if (why) setErr(why);
     })();
     try {
-      const t = localStorage.getItem('todo.theme');
-      if (t && t !== 'system') document.documentElement.dataset.theme = t;
       const a = localStorage.getItem('todo.accent');
       if (a && a !== 'todoist') document.documentElement.dataset.accent = a;
     } catch { /* без хранилища — тема системы */ }

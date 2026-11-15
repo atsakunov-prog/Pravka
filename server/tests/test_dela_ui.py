@@ -49,8 +49,9 @@ def test_factory_is_the_contract_and_passes_its_own_check():
     # Заводская пара «акцент → мягкий и текст на нём» выводится почти той же, что в kovcheg.css.
     lt = kovcheg_ui.check_look({"light": {"accent": "#2747C9"}})["light"]
     assert lt == {"info": "#2747c9", "accent": "#2747c9", "accent-ink": "#ffffff", "accent-soft": "#e9edfa"}
-    dk = kovcheg_ui.check_look({"dark": {"accent": "#93abf8"}})["dark"]
-    assert dk["accent-ink"] == "#141414" and dk["accent-soft"].startswith("#3")
+    # Ночь (16.11.2026): янтарный акцент — тёмный текст на нём, мягкий — тёплый тёмно-янтарный, около #3a2a16.
+    dk = kovcheg_ui.check_look({"dark": {"accent": "#ffb347"}})["dark"]
+    assert dk["accent-ink"] == "#141414" and dk["accent-soft"].startswith("#4")
 
 
 def test_check_menu_normalizes_and_refuses_what_would_break():

@@ -97,15 +97,16 @@ FACTORY_MENU = {
 TOKENS = ("bg", "side", "panel", "panel-2", "line", "line-soft", "text", "muted", "faint", "icon", "check", "ok", "warn",
           "bad", "info", "claude", "accent", "accent-ink", "accent-soft", "bar-fill",
           "sp0", "sp1", "sp2", "sp3", "sp4", "sp5", "sp6", "sp7")
-# Заводской вид — нынешний v2 (kovcheg.css): акцент обеих тем. Остальные токены не записаны — значит, заводские.
+# Заводской вид: светлая — v2 (13.10.2026), тёмная — «Ночь» (16.11.2026, версия 3 kovcheg.css: тёмная Засечка Правки
+# 4.0, янтарный акцент; она же по умолчанию). Остальные токены не записаны — значит, заводские.
 FACTORY_LOOK = {
     "v": 1,
     "light": {"accent": "#2747c9", "accent-ink": "#ffffff", "accent-soft": "#e9edfb", "info": "#2747c9"},
-    "dark": {"accent": "#93abf8", "accent-ink": "#141414", "accent-soft": "#252c47", "info": "#93abf8"},
+    "dark": {"accent": "#ffb347", "accent-ink": "#1d1206", "accent-soft": "#3a2a16", "info": "#8fb0ff"},
 }
 # Фон, на который ложится мягкий акцент (выбранное, подложки), если его не задали: светлая — белая панель, тёмная —
-# фон темы. Доли подобраны по заводским парам: #2747c9 → #e9edfb, #93abf8 → около #252c47.
-_SOFT = {"light": ("#ffffff", 0.10), "dark": ("#161513", 0.22)}
+# фон темы. Доли подобраны по заводским парам: #2747c9 → #e9edfb, #ffb347 → около #3a2a16.
+_SOFT = {"light": ("#ffffff", 0.10), "dark": ("#12110f", 0.20)}
 
 _KEY = re.compile(r"^[a-z][a-z0-9_-]{0,23}$")
 _ICON = re.compile(r"^[a-z][a-zA-Z0-9]{0,23}$")

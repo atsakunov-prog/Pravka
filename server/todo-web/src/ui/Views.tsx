@@ -26,11 +26,14 @@ import { openDialog, openDictate, openQuick, togglePstat, UI } from './state.ts'
 import { TaskList, reorder, draggingId, setDragId } from './TaskList.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import { openTask } from './state.ts';
+import { DayStrip } from './DayStrip.tsx';
 
 // ── Каркас вида: шапка, заголовок, кнопки справа ──────────────────────────
 
-export function Page({ title, icon, sub, actions, children, crumbs, wide }: {
+export function Page({ title, icon, sub, actions, children, crumbs, wide, top }: {
   title: ReactNode; icon?: ReactNode; sub?: ReactNode; actions?: ReactNode; children: ReactNode; crumbs?: ReactNode; wide?: boolean;
+  /** Над заголовком вида — полоса дня (DayStrip) у «Сейчас» и «Сегодня». */
+  top?: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(false);
@@ -51,6 +54,7 @@ export function Page({ title, icon, sub, actions, children, crumbs, wide }: {
         {actions}
       </div>
       <div className={'view' + (wide ? ' wide' : '')}>
+        {top}
         <h1 className="view-h">{icon}<span className="vt">{title}</span></h1>
         {sub ? <div className="view-sub">{sub}</div> : null}
         {children}
@@ -139,7 +143,7 @@ export function NowView() {
   useStore();
   const list = nowList();
   return (
-    <Page title="Сейчас" icon={<Icon name="bolt" size={26} style={{ color: 'var(--accent)' }} />} crumbs="Сейчас"
+    <Page title="Сейчас" icon={<Icon name="bolt" size={26} style={{ color: 'var(--accent)' }} />} crumbs="Сейчас" top={<DayStrip />}
       sub={<span>{list.length ? plural(list.length, 'задача', 'задачи', 'задач') + ' — то, что ты сам отметил на сегодня' : 'Отмеченное тобой на сегодня'}</span>}>
       <TaskList tasks={list} rowOpts={{ showProject: true }} nest={false} add={{ focus_on: S.today }}
         drop={{ nest: false, onDrop: (d, target, m) => {
@@ -188,7 +192,7 @@ export function TodayView() {
   ), { cls: 'sched' });
   const dropToday = { nest: false, onDrop: (d: Task) => { if (d.due_date !== S.today) setDue(d, { due_date: S.today }); } };
   return (
-    <Page title="Сегодня" crumbs="Сегодня" sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
+    <Page title="Сегодня" crumbs="Сегодня" top={<DayStrip />} sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
       {over.length ? (
         <div className="sect over">
           <div className="sect-h">

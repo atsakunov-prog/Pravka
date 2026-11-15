@@ -24,7 +24,9 @@ TWINS.pages.day = (() => {
     if (!t) return null;
     const sh = t.shabbat;
     const fri = sh && sh.today ? 'сегодня' : 'пт';
-    return el('div', { class: 'tw-tiles o7' },
+    // На узком (сложенный телефон) — первыми, над всем (16.11.2026, владелец: плашки сверху «в разложенном и сложенном»,
+    // как в Правке 4.0; до того на сложенном они стояли седьмыми).
+    return el('div', { class: 'tw-tiles o0' },
       tile('food', 'Еда', t.kcal.toLocaleString('ru-RU'), t.kcal_goal ? 'из ' + t.kcal_goal.toLocaleString('ru-RU') : 'ккал',
         t.kcal ? `ккал · белок ${t.protein} г` : 'сегодня ещё не ел', navUrl('food'), { bar: t.kcal_goal ? t.kcal / t.kcal_goal : undefined, empty: !t.kcal }),
       tile('activity', 'Спорт', t.sport_min ? String(t.sport_min) : '—', t.sport_min ? 'мин ' + t.sport_name : null,
