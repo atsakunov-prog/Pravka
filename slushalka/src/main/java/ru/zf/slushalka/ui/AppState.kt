@@ -119,6 +119,91 @@ class AppState(private val app: SlushalkaApp) {
         _readJump.value = null
     }
 
+    /** Открыть читалку на этом знаке - заметка из карточки книги ведёт к своему месту. */
+    fun jumpTo(char: Int) {
+        _readJump.value = char
+    }
+
+    // ------------------------------------------------ удалить из библиотеки
+
+    /**
+     * Книги, удалённые из библиотеки с этого телефона (16.11.2026): ключ
+     * папки - когда заказали. Сервер уносит папку в корзину в своём проходе
+     * (раз в 20 секунд), а полка прячет книгу сразу. Пропала из оглавления -
+     * сервер сделал своё, запись больше не нужна; висит дольше трёх суток -
+     * сервер её так и не взял, книга возвращается на полку, чтобы это было видно.
+     */
+    private val removedFile by lazy { java.io.File(app.filesDir, "removed.json") }
+    private val _removed by lazy {
+        MutableStateFlow(
+            ru.zf.slushalka.data.Store.readOrQuarantine(removedFile) { t ->
+                val o = org.json.JSONObject(t)
+                o.keys().asSequence().associateWith { o.optLong(it) }
+            } ?: emptyMap(),
+        )
+    }
+
+    private fun saveRemoved(map: Map<String, Long>) {
+        _removed.value = map
+        val o = org.json.JSONObject()
+        map.forEach { (k, v) -> o.put(k, v) }
+        val text = o.toString()
+        ru.zf.slushalka.data.Store.post { ru.zf.slushalka.data.Store.writeAtomic(removedFile, text) }
+    }
+
+    /**
+     * Удалить книгу из библиотеки на сервере: заказ файлом в её папке, как у
+     * разбора и озвучки, - сервер переносит папку в `_Исходники\Удалённые`,
+     * не стирает. [alsoPhone] - и копию на этом телефоне: иначе книга так и
+     * осталась бы на полке «только на телефоне».
+     */
+    fun removeFromLibrary(book: Book, local: Book?, alsoPhone: Boolean) {
+        val index = app.server.index.value
+        val sb = index?.byFolder(book.folderName)
+        if (index == null || sb == null) {
+            _notice.value = "Этой книги нет в библиотеке на сервере"
+            return
+        }
+        app.scope.launch {
+            val p = prefs.value
+            val body = org.json.JSONObject()
+                .put("by", p.profile)
+                .put("device", p.device)
+                .put("at", System.currentTimeMillis())
+                .put("title", book.title)
+                .toString()
+            val ok = withContext(Dispatchers.IO) {
+                app.cloud.putTextAtomic("${index.dirOf(sb)}/$REMOVE_ORDER", body).isSuccess
+            }
+            if (!ok) {
+                _notice.value = "Не вышло: библиотека не ответила - попробуй, когда будет связь"
+                return@launch
+            }
+            saveRemoved(_removed.value + (ru.zf.slushalka.data.ServerLibrary.folderKey(sb.folder) to System.currentTimeMillis()))
+            if (_current.value?.id == book.id && local?.onPhone != true) {
+                if (app.player.isOpen(book.id)) app.player.close()
+                _current.value = null
+                _text.value = null
+                _alignment.value = null
+            }
+            rebuildServerBooks()
+            readopt()
+            if (alsoPhone && local?.onPhone == true) deleteFromPhone(local)
+            _notice.value = "«${book.title}» удалена из библиотеки"
+        }
+    }
+
+    /** Что из удалённого ещё не ушло с сервера: полка это прячет. */
+    private fun pendingRemovals(index: ru.zf.slushalka.data.ServerLibrary.Index?): Set<String> {
+        val now = System.currentTimeMillis()
+        val all = _removed.value
+        if (all.isEmpty()) return emptySet()
+        val present = index?.books?.mapTo(HashSet()) { ru.zf.slushalka.data.ServerLibrary.folderKey(it.folder) }
+        val keep = all.filter { (k, at) -> now - at < 3 * 24 * 3600_000L && (present == null || k in present) }
+        if (keep.size != all.size && index != null) saveRemoved(keep)
+        return keep.keys
+    }
+
     /** Читалка на экране: только ей и прыгать на приехавшее место. */
     @Volatile
     private var readerVisible = false
@@ -268,9 +353,13 @@ class AppState(private val app: SlushalkaApp) {
         val index = app.server.index.value
         val root = if (index != null) rootName() else null
         val tree = treeUri()?.toString().orEmpty()
+        // Удалённые с этого телефона прячутся сразу, не дожидаясь сервера.
+        val gone = pendingRemovals(index)
         _serverBooks.value = if (index == null || root == null) emptyList()
         else withContext(Dispatchers.Default) {
-            index.books.map { ru.zf.slushalka.data.ServerLibrary.toBook(index, it, root, tree) }
+            index.books
+                .filter { ru.zf.slushalka.data.ServerLibrary.folderKey(it.folder) !in gone }
+                .map { ru.zf.slushalka.data.ServerLibrary.toBook(index, it, root, tree) }
         }
     }
 
@@ -1473,6 +1562,9 @@ class AppState(private val app: SlushalkaApp) {
     }
 
     companion object {
+        /** Заказ «удалить из библиотеки» в папке книги на сервере (booksorter\removejob.py). */
+        const val REMOVE_ORDER = "слушалка-удалить.заказ.json"
+
         /** Сколько записи расшифровывать для сверки: шести секунд хватает на
          * полтора десятка слов, а распознаётся такой кусок за секунду-другую. */
         private const val CHUNK_MS = 6_000L

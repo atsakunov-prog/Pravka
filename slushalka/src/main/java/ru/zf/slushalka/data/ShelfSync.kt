@@ -68,6 +68,11 @@ class ShelfSync(private val app: SlushalkaApp) {
         val note: String,
         /** Кандидат, когда сервер не уверен. */
         val maybe: String?,
+        /**
+         * Книгу удалили из библиотеки (16.11.2026, booksorter\removejob.py): сервер
+         * её назад не берёт, `need` пуст - копия на телефоне остаётся своей.
+         */
+        val removed: Boolean = false,
     ) {
         /** Сервер не уверен, что это за книга: на полке - «только на телефоне». */
         val unknown: Boolean get() = folder == null && !sure
@@ -711,6 +716,7 @@ class ShelfSync(private val app: SlushalkaApp) {
                             is JSONObject -> m.optString("folder").takeIf { it.isNotBlank() }
                             else -> null
                         },
+                        removed = b.optBoolean("removed", false),
                     )
                 }.toMap(),
             )

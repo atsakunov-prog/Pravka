@@ -26,9 +26,14 @@ object BookMeta {
      * для сортировки «по автору»: в имени папки автор бывает и «Имя
      * Фамилия», и «Фамилия Имя», а в fb2 фамилия размечена отдельно.
      */
-    data class Meta(val series: Series?, val surname: String?)
+    data class Meta(
+        val series: Series?,
+        val surname: String?,
+        /** Аннотация - для карточки книги, которой нет на сервере (16.11.2026). */
+        val about: String? = null,
+    )
 
-    /** Серия и фамилия из файла текста. null - файл не открылся. */
+    /** Серия, фамилия и аннотация из файла текста. null - файл не открылся. */
     fun read(context: Context, uri: Uri, fileName: String): Meta? = runCatching {
         val lower = fileName.lowercase()
         context.contentResolver.openInputStream(uri)?.use { input ->
@@ -40,9 +45,33 @@ object BookMeta {
         }
     }.getOrNull()
 
-    fun fb2Meta(text: String) = Meta(fb2Series(text), fb2Surname(text))
+    fun fb2Meta(text: String) = Meta(fb2Series(text), fb2Surname(text), fb2About(text))
 
-    fun opfMeta(text: String) = Meta(opfSeries(text), opfSurname(text))
+    fun opfMeta(text: String) = Meta(opfSeries(text), opfSurname(text), opfAbout(text))
+
+    /** Аннотация fb2: `<annotation>` в `<title-info>`, абзацы через пустую строку. */
+    fun fb2About(text: String): String? {
+        val info = titleInfo(text) ?: return null
+        val body = Regex("<(?:\\w+:)?annotation\\b[^>]*>(.*?)</(?:\\w+:)?annotation>", RegexOption.DOT_MATCHES_ALL)
+            .find(info)?.groupValues?.get(1) ?: return null
+        return aboutText(body)
+    }
+
+    /** Описание epub: `dc:description` в OPF - чаще всего HTML, спрятанный сущностями. */
+    fun opfAbout(text: String): String? {
+        val body = Regex("<dc:description\\b[^>]*>(.*?)</dc:description>", RegexOption.DOT_MATCHES_ALL)
+            .find(text)?.groupValues?.get(1) ?: return null
+        return aboutText(TextExtract.decodeEntities(body))
+    }
+
+    /** Абзацы без разметки, через пустую строку; длиннее полутора тысяч знаков - обрезка. */
+    private fun aboutText(raw: String): String? =
+        raw.split(Regex("</p>|<br\\s*/?>|<empty-line\\s*/>"))
+            .map { TextExtract.decodeEntities(it.replace(Regex("<[^>]+>"), " ")).replace(Regex("\\s+"), " ").trim() }
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+            .take(1500)
+            .takeIf { it.isNotBlank() }
 
     /** Сначала голова: описание fb2 и OPF умещаются в четверть мегабайта с запасом. */
     private fun readHead(input: InputStream, max: Int = HEAD_BYTES): ByteArray {

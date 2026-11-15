@@ -79,6 +79,11 @@ class ServerLibrary(
          */
         val category: String? = null,
         val tags: List<String> = emptyList(),
+        /**
+         * Аннотация из fb2/epub (`about`, 16.11.2026) - для карточки книги: у
+         * нескачанной книги, кроме оглавления, о ней взять нечего. Пусто - нет.
+         */
+        val about: String = "",
     ) {
         val audioBytes: Long get() = audio.sumOf { it.size }
 
@@ -337,6 +342,7 @@ class ServerLibrary(
                     category = b.optString("category").trim().takeIf { !b.isNull("category") && it.isNotBlank() },
                     tags = b.optJSONArray("tags")?.let { a -> (0 until a.length()).map { a.optString(it).trim() } }
                         ?.filter { it.isNotBlank() }.orEmpty(),
+                    about = b.optString("about").trim().takeIf { !b.isNull("about") }.orEmpty(),
                 ).let { book -> seriesOf(b)?.let { (name, num) -> book.copy(series = name, seriesNum = num) } ?: book }
             }
             return Index(

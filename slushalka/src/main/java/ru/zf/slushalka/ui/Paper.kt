@@ -208,7 +208,11 @@ fun PaperSheet(
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val eink = LocalEink.current
         val window = LocalWindowInfo.current.containerSize.height
-        val ceiling = sheetCeiling().let { if (seeThrough && window > 0) minOf(it, (window * 0.6f).toInt()) else it }
+        val ceiling = sheetCeiling()
+        // Предел «Вида» - на содержимом, а не на самом листе: Материал считает
+        // точку «развёрнут» от высоты, которую ему дали, и урезанный лист вставал
+        // к верху экрана (видно на эмуляторе 16.11.2026).
+        val cap = if (seeThrough && window > 0) (window * 0.6f).toInt() else 0
         ModalBottomSheet(
             onDismissRequest = onClose,
             sheetState = sheet,
@@ -241,6 +245,7 @@ fun PaperSheet(
                 Modifier
                     .fillMaxWidth()
                     .then(if (tall) Modifier.fillMaxHeight() else Modifier)
+                    .then(if (cap > 0) Modifier.maxHeightPx(cap) else Modifier)
                     .nestedScroll(KeepSheetStill)
                     .imePadding(),
             ) {

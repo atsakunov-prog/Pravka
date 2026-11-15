@@ -43,6 +43,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -93,6 +94,11 @@ fun LibraryScreen(
     onCloud: () -> Unit,
     /** Разговор о дочитанной книге - из меню книги. */
     onTalk: (Book) -> Unit,
+    /** Читать - читалкой, даже у книги со звуком (из карточки). */
+    onRead: (Book) -> Unit = onOpen,
+    /** Открыть карточку этой книги сразу - «О книге» из меню читалки. */
+    cardRequest: String? = null,
+    onCardShown: () -> Unit = {},
 ) {
     val state = app.state
     val books by state.books.collectAsState()
@@ -289,18 +295,35 @@ fun LibraryScreen(
                     // Статистика: сколько, когда и как быстро. Значок рисуется,
                     // как и кнопки плеера: в базовом наборе иконок графика нет.
                     IconButton(onClick = onStats) { StatsGlyph() }
-                    IconButton(onClick = onCloud) {
-                        Icon(Glyphs.Cloud, contentDescription = "Облако")
-                    }
-                    // Обновить - и оглавление сервера, и свою папку: полка одна.
-                    IconButton(onClick = {
-                        if (prefs.cloudReady) app.scope.launch { app.server.refresh() }
-                        state.rescan()
-                    }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Обновить полку")
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = "Настройки")
+                    // Облако, «обновить» и настройки - в меню (16.11.2026): пять
+                    // значков в шапке читались частоколом, а нужны они редко.
+                    var menu by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(onClick = { menu = true }) {
+                            Icon(androidx.compose.material.icons.Icons.Default.MoreVert, contentDescription = "Ещё")
+                        }
+                        androidx.compose.material3.DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Обновить полку") },
+                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                                onClick = {
+                                    menu = false
+                                    // И оглавление сервера, и свою папку: полка одна.
+                                    if (prefs.cloudReady) app.scope.launch { app.server.refresh() }
+                                    state.rescan()
+                                },
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Облако") },
+                                leadingIcon = { Icon(Glyphs.Cloud, contentDescription = null) },
+                                onClick = { menu = false; onCloud() },
+                            )
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text("Настройки") },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                                onClick = { menu = false; onSettings() },
+                            )
+                        }
                     }
                 },
             )
@@ -366,8 +389,10 @@ fun LibraryScreen(
         // Книга на полке - плиткой или строкой; одна и та же в простом порядке и в группах.
         val bookCell: @Composable (Book) -> Unit = { book ->
             val entry = entryOf[book.id] ?: ShelfEntry(book, null, book.takeIf { it.onPhone })
-            // Тап - открыть: скачанную с телефона, нескачанную - прямо с сервера.
-            val onClick = { open(entry.local ?: entry.book) }
+            // Тап - карточка книги (16.11.2026): сперва посмотреть, о чём она, потом
+            // открыть. Раньше тап сразу уводил в плеер, а карточка пряталась за
+            // долгим нажатием. «Продолжить» наверху открывает книгу сразу.
+            val onClick = { menuFor = entry }
             val onLongClick = { menuFor = entry }
             val note = if (phoneOnly(entry)) "только на телефоне" else null
             val has = contents[book.id] ?: contentsOf(entry)
@@ -477,7 +502,8 @@ fun LibraryScreen(
                     item(key = "continue", span = { GridItemSpan(maxLineSpan) }) {
                         ContinueCard(
                             app, top, progress.getValue(top.id), prefs.recapAfterHours,
-                            onOpen = open, onRemind = remind,
+                            onOpen = open, onRead = onRead, onRemind = remind,
+                            onCard = { entryOf[top.id]?.let { menuFor = it } ?: run { menuFor = ShelfEntry(top, null, top.takeIf { it.onPhone }) } },
                         )
                     }
                 }
@@ -557,23 +583,55 @@ fun LibraryScreen(
         }
     }
 
-    menuFor?.let { entry ->
+    // «О книге» из меню читалки: карточка открывается сразу, как найдётся книга.
+    LaunchedEffect(cardRequest, entryOf) {
+        val id = cardRequest ?: return@LaunchedEffect
+        entryOf[id]?.let { menuFor = it; onCardShown() }
+    }
+
+    menuFor?.let { picked ->
+        // Карточка живёт, пока на неё смотрят: книга могла докачаться или
+        // лишиться копии - берём свежую запись полки, а не ту, что тапнули.
+        val entry = entryOf[picked.book.id] ?: picked
         val book = entry.book
         val sb = entry.server
         val idx = index
         val down = downloading(entry)
         val v = verdictOf(entry)
-        BookSheet(
+        val progress = progressOf(app, book)
+        val target = entry.local ?: book
+        BookCard(
+            app = app,
             entry = entry,
-            progress = progressOf(app, book),
+            progress = progress,
+            has = contents[book.id] ?: contentsOf(entry),
             where = whereLine(entry, v, uploads[entry.local?.phoneKey], down, library),
             series = seriesOf(book),
+            places = placesOf(app, book),
+            onBack = { menuFor = null },
             onSeries = { name -> menuFor = null; pickSeries(name) },
-            onOpen = { menuFor = null; open(entry.local ?: book) },
-            onRemind = { menuFor = null; remind(entry.local ?: book) },
-            onRazbor = razborOf(entry.local ?: book)?.let { go -> { menuFor = null; go() } },
+            onListen = if (book.hasAudio || sb?.audio?.isNotEmpty() == true) { { menuFor = null; open(target) } } else null,
+            onRead = if (book.hasText || sb?.mainText != null) {
+                {
+                    menuFor = null
+                    if (!target.onPhone && !app.shelf.online()) {
+                        state.say("Нет связи с библиотекой: книга не скачана - её можно открыть, когда появится сеть")
+                    } else onRead(target)
+                }
+            } else null,
+            onRemind = if (progress.canRemind) { { menuFor = null; remind(target) } } else null,
+            onRazbor = razborOf(target)?.let { go -> { menuFor = null; go() } },
+            onNote = { n ->
+                menuFor = null
+                state.jumpTo(n.start)
+                onRead(target)
+            },
+            removedNote = v?.takeIf { it.removed }?.note,
+            onRemoveLibrary = if (sb != null && idx != null) {
+                { alsoPhone -> menuFor = null; state.removeFromLibrary(book, entry.local, alsoPhone) }
+            } else null,
             voice = if (app.nightVoice.canOrder(book)) { { VoiceOrderBlock(app, book) } } else null,
-            onTalk = { menuFor = null; onTalk(entry.local ?: book) },
+            onTalk = if (book.hasText && (progress.done || progress.started)) { { menuFor = null; onTalk(target) } } else null,
             // Скачать - что можно: целиком, только текст, докачать звук.
             downloads = if (sb == null || idx == null || down != null) emptyList() else buildList {
                 when (entry.copy) {
@@ -600,11 +658,9 @@ fun LibraryScreen(
             // Облако без библиотеки (Яндекс.Диск) - выгрузить можно рукой; в
             // домашнюю библиотеку книга с телефона уезжает сама, по сверке.
             onUpload = if (prefs.cloudReady && idx == null && entry.local?.onPhone == true && !book.streams) {
-                { menuFor = null; app.cloudBooks.upload(entry.local) }
+                { app.cloudBooks.upload(entry.local) }
             } else null,
-            onDelete = if (entry.local?.onPhone == true) { { menuFor = null; deleteAsk = entry } } else null,
-            places = placesOf(app, book),
-            onClose = { menuFor = null },
+            onDeletePhone = if (entry.local?.onPhone == true) { { deleteAsk = entry } } else null,
         )
     }
 
@@ -622,10 +678,10 @@ fun LibraryScreen(
 }
 
 /** Что у книги на телефоне: ничего, целиком или текст со звуком с сервера. */
-private enum class Copy { NONE, FULL, TEXT }
+internal enum class Copy { NONE, FULL, TEXT }
 
 /** Книга на полке: что показывать и открывать, она на сервере и своя копия, если есть. */
-private class ShelfEntry(val book: Book, val server: ServerLibrary.ServerBook?, val local: Book?) {
+internal class ShelfEntry(val book: Book, val server: ServerLibrary.ServerBook?, val local: Book?) {
     val copy: Copy
         get() {
             val l = local?.takeIf { it.onPhone } ?: return Copy.NONE
@@ -634,10 +690,10 @@ private class ShelfEntry(val book: Book, val server: ServerLibrary.ServerBook?, 
         }
 }
 
-private enum class BadgeKind { FULL, TEXT, DOWN, UP }
+internal enum class BadgeKind { FULL, TEXT, DOWN, UP }
 
 /** Значок в углу обложки и его доля: качается или выгружается. */
-private class Badge(val kind: BadgeKind, val share: Float?)
+internal class Badge(val kind: BadgeKind, val share: Float?)
 
 /** Где книга - строкой в окне книги. */
 private fun whereLine(
@@ -775,7 +831,7 @@ private val ROW_MIN = 330.dp
  * Где книга по пути: сколько пройдено (звуком или глазами), когда трогали,
  * есть ли что напоминать.
  */
-private data class Progress(
+internal data class Progress(
     val share: Float,
     val started: Boolean,
     val done: Boolean,
@@ -784,7 +840,7 @@ private data class Progress(
     val canRemind: Boolean,
 )
 
-private fun progressOf(app: SlushalkaApp, book: Book): Progress {
+internal fun progressOf(app: SlushalkaApp, book: Book): Progress {
     val st = app.state.stateOf(book.id)
     val share = when {
         book.hasAudio && book.totalMs > 0 -> (st.absMs.toFloat() / book.totalMs).coerceIn(0f, 1f)
@@ -881,7 +937,10 @@ private fun ShelfSearch(query: String, onChange: (String) -> Unit) {
         value = query,
         onValueChange = onChange,
         modifier = Modifier.fillMaxWidth(),
-        placeholder = { Text("Найти на полке: название, автор, серия") },
+        // Подсказка в одну строку: длинная переносилась, и поле вырастало в
+        // пол-экрана над полкой (16.11.2026, видно на живом экране).
+        placeholder = { Text("Найти на полке", maxLines = 1) },
+        textStyle = MaterialTheme.typography.bodyLarge,
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
         trailingIcon = if (query.isNotEmpty()) {
             {
@@ -1037,39 +1096,50 @@ private fun ContinueCard(
     progress: Progress,
     recapAfterHours: Int,
     onOpen: (Book) -> Unit,
+    onRead: (Book) -> Unit,
     onRemind: (Book) -> Unit,
+    onCard: () -> Unit,
 ) {
     val st = app.state.stateOf(book.id)
     val left = (book.totalMs - st.absMs).coerceAtLeast(0)
     // Давно не открывал - напоминание выходит вперёд, а не прячется в меню.
     val away = st.updatedAt > 0 && System.currentTimeMillis() - st.updatedAt > recapAfterHours * 3600_000L
+    // Продолжают тем, чем занимались последним: читал - читалкой, слушал -
+    // плеером (16.11.2026; раньше книга со звуком всегда открывалась плеером).
+    val reading = book.hasText && (!book.hasAudio || st.readAt > st.listenAt)
+    val go = { if (reading) onRead(book) else onOpen(book) }
+    val c = MaterialTheme.colorScheme
     Card(
-        onClick = { onOpen(book) },
-        shape = RoundedCornerShape(22.dp),
+        onClick = go,
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            containerColor = c.surfaceContainerLowest,
+            contentColor = c.onSurface,
         ),
+        border = androidx.compose.foundation.BorderStroke(if (app.state.prefs.value.readerEinkLow) 1.dp else 0.6.dp, c.outlineVariant),
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.Top) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
+            // Обложка - вход в карточку книги: о чём она, заметки, разбор.
             CoverTile(
                 app, book,
                 Modifier
-                    .width(104.dp)
+                    .width(96.dp)
                     .aspectRatio(COVER_RATIO)
-                    .shadow(10.dp, RoundedCornerShape(10.dp))
-                    .clip(RoundedCornerShape(10.dp)),
+                    .shadow(8.dp, RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(onClick = onCard),
             )
             Spacer(Modifier.width(16.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    if (book.hasAudio) "ПРОДОЛЖИТЬ СЛУШАТЬ" else "ПРОДОЛЖИТЬ ЧИТАТЬ",
+                    if (reading) "ПРОДОЛЖИТЬ ЧИТАТЬ" else "ПРОДОЛЖИТЬ СЛУШАТЬ",
                     style = MaterialTheme.typography.labelSmall,
+                    color = c.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    book.title,
+                    shownTitle(book.title),
                     style = MaterialTheme.typography.titleLarge,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -1090,10 +1160,10 @@ private fun ContinueCard(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     when {
-                        !book.hasAudio -> if (st.readChar > 0) {
+                        reading -> if (st.readChar > 0) {
                             "стр. ${st.readChar / Settings.PAGE_CHARS + 1}" +
                                 if (progress.share > 0f) " · ${(progress.share * 100).toInt()}%" else ""
-                        } else "текст, без звука"
+                        } else "текст"
                         book.totalMs > 0 ->
                             "${(progress.share * 100).toInt()}% · осталось ${formatLeft(left, st.speed.takeIf { it > 0 } ?: 1f)}"
                         else -> "длительности ещё не измерены"
@@ -1105,20 +1175,28 @@ private fun ContinueCard(
                         if (away) "не открывал ${formatAgo(st.updatedAt).removeSuffix(" назад")}"
                         else "открывал ${formatAgo(st.updatedAt)}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (away) MaterialTheme.colorScheme.tertiary
-                        else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                        color = if (away) c.tertiary else c.onSurfaceVariant,
                     )
                 }
-                Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { onOpen(book) }) {
-                        Text(if (book.hasAudio) "Слушать" else "Читать")
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Button(onClick = go, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)) {
+                        Icon(if (reading) Glyphs.AutoStories else Glyphs.Headphones, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (reading) "Читать" else "Слушать")
+                    }
+                    // Второй способ - рядом, значком: книга со звуком и текстом.
+                    if (book.hasAudio && book.hasText) {
+                        IconButton(onClick = { if (reading) onOpen(book) else onRead(book) }) {
+                            Icon(
+                                if (reading) Glyphs.Headphones else Glyphs.AutoStories,
+                                contentDescription = if (reading) "Слушать" else "Читать",
+                            )
+                        }
                     }
                     if (progress.canRemind) {
-                        FilledTonalButton(onClick = { onRemind(book) }) {
-                            Icon(Glyphs.History, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Напомнить")
+                        IconButton(onClick = { onRemind(book) }) {
+                            Icon(Glyphs.History, contentDescription = "Напомнить, на чём остановился", tint = if (away) c.tertiary else c.onSurface)
                         }
                     }
                 }
@@ -1126,6 +1204,13 @@ private fun ContinueCard(
         }
     }
 }
+
+/**
+ * Название для глаз: «1 - Этюд в багровых тонах» - «Этюд в багровых тонах». Номер серии сервер
+ * ставит в имя папки, чтобы серия шла по порядку, а на полке он и так стоит рядом («№1»).
+ */
+internal fun shownTitle(title: String): String =
+    title.replace(Regex("^\\d{1,3}\\s*[-–—.]\\s+"), "").ifBlank { title }
 
 /** Пропорция плитки - книжная, 2:3: на полке стоят книги, а не альбомы. */
 private const val COVER_RATIO = 2f / 3f
@@ -1162,8 +1247,8 @@ private fun BookTile(
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(COVER_RATIO)
-                .shadow(6.dp, RoundedCornerShape(10.dp))
-                .clip(RoundedCornerShape(10.dp)),
+                .shadow(5.dp, RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(8.dp)),
         ) {
             CoverTile(app, book, Modifier.fillMaxSize())
             if (progress.started) ProgressStrip(progress.share, Modifier.align(Alignment.BottomStart), 4.dp)
@@ -1171,13 +1256,13 @@ private fun BookTile(
                 Text(
                     "✓",
                     color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.labelMedium,
+                    style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(6.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary)
-                        .padding(horizontal = 7.dp, vertical = 2.dp),
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.9f))
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
                 )
             }
             // Что в книге есть - видно, не открывая (08.10.2026, владелец: «прямо
@@ -1189,43 +1274,39 @@ private fun BookTile(
                 CopyBadge(badge, onCover = true, modifier = Modifier.align(Alignment.BottomEnd).padding(end = 5.dp, bottom = 9.dp))
             }
         }
-        Spacer(Modifier.height(6.dp))
+        // Подпись - всегда три строки одной высоты (16.11.2026, владелец:
+        // «библиотека выглядит криво»): название в две строки, автор, строка
+        // состояния. Раньше у одной плитки было пять строк, у соседней две, и
+        // ряды полки шли лесенкой. Серия - в строке состояния, вся серия - в
+        // карточке книги и группой на полке.
+        Spacer(Modifier.height(8.dp))
         Text(
-            book.title,
+            shownTitle(book.title),
             style = MaterialTheme.typography.titleSmall,
+            minLines = 2,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        if (series != null) SeriesLink(series, onSeries)
-        if (book.author.isNotBlank()) {
-            Text(
-                book.author,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        val line = statusLine(book, progress)
-        if (line.isNotBlank()) {
-            Text(
-                line,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (progress.started) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-        if (note != null) {
-            Text(
-                note,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            book.author.ifBlank { " " },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        val line = listOfNotNull(
+            series?.let { s -> s.number?.let { "№$it" } ?: s.name },
+            statusLine(book, progress).takeIf { it.isNotBlank() },
+            note,
+        ).joinToString(" · ")
+        Text(
+            line.ifBlank { " " },
+            style = MaterialTheme.typography.labelSmall,
+            color = if (progress.started) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1272,7 +1353,7 @@ private fun BookRow(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.Top) {
                 Text(
-                    book.title,
+                    shownTitle(book.title),
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -1326,7 +1407,7 @@ private fun BookRow(
 }
 
 /** Что в книге есть: текст, звук ([machine] - озвучено нейросетью), разбор сервера. */
-private data class Contents(val text: Boolean, val audio: Boolean, val machine: Boolean, val razbor: Boolean)
+internal data class Contents(val text: Boolean, val audio: Boolean, val machine: Boolean, val razbor: Boolean)
 
 /**
  * Что в книге есть - значками: книга - текст, наушники - запись чтеца,
@@ -1335,7 +1416,7 @@ private data class Contents(val text: Boolean, val audio: Boolean, val machine: 
  * читалось на любой картинке; в строке списка - тихим цветом рядом со словами.
  */
 @Composable
-private fun ContentMarks(has: Contents, onCover: Boolean, modifier: Modifier = Modifier) {
+internal fun ContentMarks(has: Contents, onCover: Boolean, modifier: Modifier = Modifier) {
     if (!has.text && !has.audio && !has.razbor) return
     val size = if (onCover) 14.dp else 13.dp
     val tint = if (onCover) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
@@ -1383,7 +1464,7 @@ private fun ContentMarks(has: Contents, onCover: Boolean, modifier: Modifier = M
  * чтобы читался на любой картинке.
  */
 @Composable
-private fun CopyBadge(badge: Badge, onCover: Boolean, modifier: Modifier = Modifier) {
+internal fun CopyBadge(badge: Badge, onCover: Boolean, modifier: Modifier = Modifier) {
     val size = if (onCover) 24.dp else 18.dp
     val tint = if (onCover) Color.White else MaterialTheme.colorScheme.primary
     Box(
@@ -1421,7 +1502,7 @@ private fun CopyBadge(badge: Badge, onCover: Boolean, modifier: Modifier = Modif
 
 /** Полоска пройденного по нижнему краю обложки: видно с первого взгляда, не читая цифр. */
 @Composable
-private fun ProgressStrip(share: Float, modifier: Modifier, height: androidx.compose.ui.unit.Dp) {
+internal fun ProgressStrip(share: Float, modifier: Modifier, height: androidx.compose.ui.unit.Dp) {
     Box(
         modifier
             .fillMaxWidth()
@@ -1438,7 +1519,7 @@ private fun ProgressStrip(share: Float, modifier: Modifier, height: androidx.com
 }
 
 /** Свой процент, а нет его - длительность или «без текста». */
-private fun statusLine(book: Book, progress: Progress, withSpan: Boolean = true): String = when {
+internal fun statusLine(book: Book, progress: Progress, withSpan: Boolean = true): String = when {
     progress.done -> if (book.hasAudio) "дослушано" else "прочитано"
     progress.started -> "${(progress.share * 100).toInt().coerceAtLeast(1)}%"
     withSpan && book.hasAudio && book.totalMs > 0 -> formatSpan(book.totalMs)
@@ -1499,165 +1580,6 @@ private fun SeriesBar(name: String, count: Int, onClear: () -> Unit) {
 }
 
 /**
- * Окно книги - долгим нажатием: что в ней и где она, где остановился, и что
- * с ней можно сделать - открыть, напомнить, разбор, озвучить, поговорить,
- * скачать (целиком, только текст, докачать звук), удалить с телефона копию.
- */
-@Composable
-private fun BookSheet(
-    entry: ShelfEntry,
-    progress: Progress,
-    /** Где книга: скачана, текстом, не скачана, только на телефоне; null - сервера нет. */
-    where: String?,
-    series: BookMeta.Series?,
-    onSeries: (String) -> Unit,
-    onOpen: () -> Unit,
-    onRemind: () -> Unit,
-    /** Открыть разбор сервера; null - разбора у книги нет. */
-    onRazbor: (() -> Unit)?,
-    /** «Озвучить нейросетью» и статус заказа; null - книге озвучка не положена. */
-    voice: (@Composable () -> Unit)?,
-    onTalk: () -> Unit,
-    /** Как скачать: подпись с объёмом и действие. Пусто - скачивать нечего. */
-    downloads: List<Pair<String, () -> Unit>>,
-    /** Идёт другая передача: вторая разом не начинается. */
-    downloadBusy: Boolean,
-    /** Остановить скачивание этой книги; null - она не качается. */
-    onStopDownload: (() -> Unit)?,
-    /** Выгрузить в облако без библиотеки; null - не к этому облаку или книге. */
-    onUpload: (() -> Unit)?,
-    /** Удалить копию с телефона; null - копии нет. */
-    onDelete: (() -> Unit)?,
-    places: List<PlaceLine>,
-    onClose: () -> Unit,
-) {
-    val book = entry.book
-    val server = entry.server
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text(book.title, maxLines = 3, overflow = TextOverflow.Ellipsis) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (book.author.isNotBlank()) Text(book.author, style = MaterialTheme.typography.bodyMedium)
-                // Категория и теги сервера (17.10.2026): видно, что за книга, не открывая её
-                (book.category ?: server?.category)?.let { cat ->
-                    Text(
-                        (listOf(cat) + book.tags.ifEmpty { server?.tags.orEmpty() }).joinToString(" · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                val facts = buildList {
-                    if (server != null && server.audio.isNotEmpty()) {
-                        add("звук ${formatSpan(server.audioMs.takeIf { it > 0 } ?: book.totalMs)} · " +
-                            formatBytes(server.audioBytes))
-                    }
-                    server?.mainText?.let { add("текст ${it.name.substringAfterLast('.', "").lowercase()} · ${formatBytes(it.size)}") }
-                    if (server != null && server.audio.isEmpty() && !book.hasAudio) add("без записи")
-                    if (server?.machineVoiced == true && server.audio.isNotEmpty()) add("озвучено нейросетью")
-                }
-                if (facts.isNotEmpty()) {
-                    Text(
-                        facts.joinToString("; "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Text(
-                    listOfNotNull(
-                        where,
-                        when {
-                            progress.done -> "Пройдена до конца."
-                            progress.started -> "Пройдено ${(progress.share * 100).toInt()}%."
-                            else -> null
-                        },
-                    ).joinToString(" "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                PlacesBlock(places)
-                if (series != null) SeriesMenuLink(series, onSeries)
-                if (progress.canRemind) {
-                    Spacer(Modifier.height(10.dp))
-                    FilledTonalButton(onClick = onRemind, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Glyphs.History, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Напомнить, о чём там")
-                    }
-                }
-                if (onRazbor != null) {
-                    Spacer(Modifier.height(6.dp))
-                    RazborButton(onRazbor)
-                }
-                voice?.invoke()
-                if (book.hasText && (progress.done || progress.started)) {
-                    Spacer(Modifier.height(6.dp))
-                    FilledTonalButton(onClick = onTalk, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Glyphs.Forum, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Поговорить о книге")
-                    }
-                }
-                downloads.forEach { (label, action) ->
-                    Spacer(Modifier.height(6.dp))
-                    FilledTonalButton(
-                        onClick = {
-                            onClose()
-                            action()
-                        },
-                        enabled = !downloadBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Icon(Glyphs.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(label)
-                    }
-                }
-                if (downloads.isNotEmpty() && downloadBusy) {
-                    Text(
-                        "Идёт другая передача - эта начнётся, когда та кончится.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (onStopDownload != null) {
-                    TextButton(onClick = onStopDownload, modifier = Modifier.fillMaxWidth()) {
-                        Text("Остановить скачивание")
-                    }
-                }
-                if (onUpload != null) {
-                    Spacer(Modifier.height(6.dp))
-                    TextButton(onClick = onUpload, modifier = Modifier.fillMaxWidth()) {
-                        Icon(Glyphs.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Выгрузить в облако")
-                    }
-                }
-                if (onDelete != null) {
-                    TextButton(onClick = onDelete, modifier = Modifier.fillMaxWidth()) {
-                        Text("Удалить с телефона", color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onOpen) { Text(if (book.hasAudio) "Слушать" else "Читать") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("Закрыть") } },
-    )
-}
-
-/** «Разбор книги» в карточке: сервер разобрал её - о книге, идеи, линзы, книга за 15 минут. */
-@Composable
-private fun RazborButton(onClick: () -> Unit) {
-    FilledTonalButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Icon(Glyphs.Lightbulb, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
-        Text("Разбор книги")
-    }
-}
-
-/**
  * «Озвучить нейросетью» в карточке книги без звука. Пока сервер ведёт заказ -
  * вместо кнопки его статус (раз в минуту, пока карточка открыта). Новый заказ
  * - в два нажатия: первое читает текст и показывает прикидку (часы звука,
@@ -1666,7 +1588,7 @@ private fun RazborButton(onClick: () -> Unit) {
  * же куска.
  */
 @Composable
-private fun VoiceOrderBlock(app: SlushalkaApp, book: Book) {
+internal fun VoiceOrderBlock(app: SlushalkaApp, book: Book) {
     val orders by app.nightVoice.orders.collectAsState()
     val order = orders[ServerLibrary.folderKey(book.folderName)]
     val scope = rememberCoroutineScope()
@@ -1777,13 +1699,13 @@ private fun VoiceOrderBlock(app: SlushalkaApp, book: Book) {
 }
 
 /** Строка «где я» в меню книги: что и когда. */
-private data class PlaceLine(val text: String)
+internal data class PlaceLine(val text: String)
 
 /**
  * Свои места в книге: где слушал и где читал, каждое со своим временем, - чтобы
  * было видно, что место не сбилось. Только свои: места у каждого личные.
  */
-private fun placesOf(app: SlushalkaApp, book: Book): List<PlaceLine> {
+internal fun placesOf(app: SlushalkaApp, book: Book): List<PlaceLine> {
     val st = app.state.stateOf(book.id)
     return listOfNotNull(
         if (st.listenAt > 0 && book.hasAudio) {
@@ -1797,31 +1719,6 @@ private fun placesOf(app: SlushalkaApp, book: Book): List<PlaceLine> {
                 ", ${formatAgo(st.readAt)}"
         } else null,
     ).map(::PlaceLine)
-}
-
-@Composable
-private fun PlacesBlock(places: List<PlaceLine>) {
-    if (places.isEmpty()) return
-    Spacer(Modifier.height(8.dp))
-    places.forEach { p ->
-        Text(
-            p.text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-/** Серия в меню книги: «Серия «Дюна», книга 2 - вся серия». */
-@Composable
-private fun SeriesMenuLink(series: BookMeta.Series, onSeries: (String) -> Unit) {
-    TextButton(onClick = { onSeries(series.name) }, modifier = Modifier.fillMaxWidth()) {
-        Text(
-            "Серия «${series.name}»" + (series.number?.let { ", книга $it" } ?: "") + " - вся серия",
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-    }
 }
 
 /**

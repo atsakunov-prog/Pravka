@@ -254,7 +254,10 @@ fun ReaderScreen(
         bevel = prefs.readerBevel,
         sheen = prefs.readerSheen,
         grain = prefs.readerGrain,
-        bleed = if (prefs.readerBleed) prefs.readerBleedLevel else 0f,
+        // У «Бумаги» просвет вдвое тише: лист во весь экран без переплёта, и
+        // оборот той же силы, что у тома, на эмуляторе читался грязью.
+        bleed = if (!prefs.readerBleed) 0f
+        else prefs.readerBleedLevel * (if (prefs.readerPageStyle == Settings.PAGE_PAPER) 0.5f else 1f),
         curl = prefs.readerBookTurn == Settings.BOOK_TURN_CURL,
         tilt = prefs.readerBookTilt,
         ribbon = prefs.readerBookRibbon,
@@ -717,7 +720,12 @@ fun ReaderScreen(
      */
     fun pageNoteRange(): IntRange {
         val at = readPlace().coerceIn(0, (t.length - 1).coerceAtLeast(0))
-        val r = t.sentenceAt(at)
+        // Фраза, начатая ещё на прошлой странице, - не «эта страница»: берём
+        // следующую, если она начинается здесь же.
+        val r = t.sentenceAt(at).let { first ->
+            if (first.first >= at || first.last + 1 >= shownEnd) first
+            else t.sentenceAt((first.last + 1).coerceAtMost(t.length - 1)).takeIf { it.first < shownEnd } ?: first
+        }
         var e = r.last
         while (e > r.first && t.plain.getOrNull(e - 1)?.isWhitespace() == true) e--
         return if (e > r.first) r.first..e else at..(at + 1).coerceAtMost(t.length)
@@ -733,7 +741,10 @@ fun ReaderScreen(
     }
 
     // Плашки узнают о режиме e-ink отсюда: без теней, анимаций и полутонов.
-    androidx.compose.runtime.CompositionLocalProvider(LocalEink provides eink) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalEink provides eink,
+        LocalReaderFullscreen provides stored.readerFullscreen,
+    ) {
     Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
         if (prefs.readerPaged) {
             PagedBody(
@@ -816,7 +827,11 @@ fun ReaderScreen(
         near?.let { pic ->
             val file = app.texts.pictureFile(bk.id, pic.file)
             // Пока нижняя плашка на экране, значок картинки стоит над ней, а не под.
-            val lift = with(LocalDensity.current) { if (bottomShown) bottomBarPx.toDp() else 0.dp }
+            // Без панели - над нижним колонтитулом: во весь экран номер страницы
+            // стоит у самого края, и значок его закрывал.
+            val lift = with(LocalDensity.current) {
+                if (bottomShown) bottomBarPx.toDp() else readerBottomInset() + if (prefs.readerPaged) 26.dp else 0.dp
+            }
             PictureChip(file, palette, Modifier.align(Alignment.BottomEnd).padding(bottom = lift).padding(14.dp)) {
                 picture = ShownPicture(file, pic.caption, pic.charOffset)
             }

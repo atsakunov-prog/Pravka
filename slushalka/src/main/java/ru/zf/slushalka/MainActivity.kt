@@ -186,15 +186,22 @@ class MainActivity : ComponentActivity() {
         var talkDone by remember { mutableStateOf<Boolean?>(null) }
         val current by state.current.collectAsState()
 
+        // Читалку открыли «Читать» из карточки книги - «назад» ведёт на полку,
+        // откуда пришли, а не в плеер, которого не открывали.
+        var readerBack by remember { mutableStateOf<Screen?>(null) }
+        // Карточку книги открыть сразу - «О книге» из меню читалки.
+        var cardRequest by remember { mutableStateOf<String?>(null) }
+
         // Куда возвращаться из читалки: книге без записи плеер не нужен,
         // из неё «назад» - сразу на полку.
-        fun afterReader(): Screen = if (current?.hasAudio == false) Screen.LIBRARY else Screen.PLAYER
+        fun afterReader(): Screen = readerBack ?: if (current?.hasAudio == false) Screen.LIBRARY else Screen.PLAYER
 
         // Книга со звуком открывается плеером, книга из каталога - сразу читалкой.
         val openBook: (Book) -> Unit = { picked ->
             // Звук мог появиться на сервере уже после того, как книгу взяли
             // текстом: тогда она открывается плеером, а не читалкой.
             val book = state.withServerAudio(picked)
+            readerBack = null
             state.open(book)
             if (book.hasAudio) {
                 startPlayback()
@@ -202,6 +209,16 @@ class MainActivity : ComponentActivity() {
             } else {
                 screen = Screen.READER
             }
+        }
+
+        // «Читать» из карточки (16.11.2026): читалкой, даже если у книги есть
+        // звук, - звук при этом не трогается, плеер стоит на паузе.
+        val readBook: (Book) -> Unit = { picked ->
+            val book = state.withServerAudio(picked)
+            if (current?.id != book.id) state.open(book)
+            app.player.pauseForAsking()
+            readerBack = Screen.LIBRARY
+            screen = Screen.READER
         }
 
         // Виджет «Продолжить»: книга открывается там же, где открылась бы с
@@ -298,6 +315,9 @@ class MainActivity : ComponentActivity() {
                         talkDone = null
                         talking = true
                     },
+                    onRead = readBook,
+                    cardRequest = cardRequest,
+                    onCardShown = { cardRequest = null },
                 )
 
                 Screen.STATS -> StatsScreen(app = app, onBack = { screen = Screen.LIBRARY })
@@ -328,6 +348,7 @@ class MainActivity : ComponentActivity() {
                         // Перешёл читать - звук замолкает: слушать и читать
                         // одновременно всё равно не выходит.
                         app.player.pauseForAsking()
+                        readerBack = null
                         screen = Screen.READER
                     },
                     onSettings = { screen = Screen.SETTINGS },
@@ -354,6 +375,10 @@ class MainActivity : ComponentActivity() {
                         talkAt = at
                         talkDone = done
                         talking = true
+                    },
+                    onCard = {
+                        cardRequest = current?.id
+                        screen = Screen.LIBRARY
                     },
                 )
 

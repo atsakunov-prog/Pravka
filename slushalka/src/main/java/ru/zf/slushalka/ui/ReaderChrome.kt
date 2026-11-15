@@ -71,6 +71,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -300,14 +301,23 @@ val BAR_INSET = 10.dp
  */
 @Composable
 fun readerTopInset(): androidx.compose.ui.unit.Dp =
-    WindowInsets.statusBars.union(WindowInsets.displayCutout)
+    // Во весь экран полосы системы не в счёт вовсе, даже когда они на миг
+    // видны: любое окно поверх книги (лист «Вид», вопрос) возвращает строку
+    // состояния, и страница съезжала бы вниз и переразбивалась (эмулятор,
+    // 16.11.2026). Остаётся только вырез камеры.
+    (if (LocalReaderFullscreen.current) WindowInsets.displayCutout
+    else WindowInsets.statusBars.union(WindowInsets.displayCutout))
         .asPaddingValues().calculateTopPadding()
 
 /** Снизу у читалки: панель навигации, а во весь экран - только вырез, если он внизу. */
 @Composable
 fun readerBottomInset(): androidx.compose.ui.unit.Dp =
-    WindowInsets.navigationBars.union(WindowInsets.displayCutout)
+    (if (LocalReaderFullscreen.current) WindowInsets.displayCutout
+    else WindowInsets.navigationBars.union(WindowInsets.displayCutout))
         .asPaddingValues().calculateBottomPadding()
+
+/** Читалка во весь экран: полосы системы спрятаны, их отступы не в счёт. */
+val LocalReaderFullscreen = androidx.compose.runtime.staticCompositionLocalOf { false }
 
 /** Время для страницы во весь экран: часов системы не видно, а который час, знать хочется. */
 fun clockNow(): String = java.time.LocalTime.now().let { "%d:%02d".format(it.hour, it.minute) }
@@ -570,7 +580,15 @@ fun NoteEditor(
         voice.start()
         listening = true
     }
-    LaunchedEffect(Unit) { if (listenAtOnce) toggleVoice() }
+    val focus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(Unit) {
+        if (listenAtOnce) toggleVoice()
+        else {
+            // Лист сперва выезжает: фокус до того, как поле легло, не берётся.
+            kotlinx.coroutines.delay(250)
+            runCatching { focus.requestFocus() }
+        }
+    }
 
     PaperSheet(
         app = app,
@@ -598,12 +616,15 @@ fun NoteEditor(
                 if (text.isEmpty()) {
                     Text(if (listening) "Слушаю…" else "Что подумалось…", style = bookBody(), color = c.onSurfaceVariant)
                 }
+                // Поле - во всю рамку и сразу с клавиатурой (16.11.2026): было в
+                // одну строку у верха рамки, тап по пустой рамке шёл мимо, и
+                // записать мысль казалось нечем.
                 androidx.compose.foundation.text.BasicTextField(
                     value = text,
                     onValueChange = { text = it },
                     textStyle = bookBody().copy(color = c.onSurface),
                     cursorBrush = androidx.compose.ui.graphics.SolidColor(c.onSurface),
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 82.dp).focusRequester(focus),
                 )
             }
             Spacer(Modifier.width(8.dp))

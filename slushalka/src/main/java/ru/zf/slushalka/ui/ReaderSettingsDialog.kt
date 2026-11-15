@@ -167,7 +167,9 @@ private fun TextTab(app: SlushalkaApp) {
     }
     if (perLine != null && perLine !in 44..56) {
         val bookSize = (prefs.readerSize * perLine / 50f).toInt().coerceIn(12, 34)
-        if (bookSize != prefs.readerSize) {
+        // Совет «как в книге» - только разумный: на узком телефоне пятьдесят
+        // знаков в строке выходят кеглем 12, так читать никто не станет.
+        if (bookSize != prefs.readerSize && (bookSize >= 15 || perLine > 56)) {
             Spacer(Modifier.height(8.dp))
             PaperButton("Как в книге: $bookSize, ≈50 знаков", icon = Glyphs.AutoStories, modifier = Modifier.fillMaxWidth()) {
                 scope.launch { s.setReaderSize(bookSize) }
@@ -451,7 +453,7 @@ private fun PaperTab(app: SlushalkaApp) {
                 colors = SliderDefaults.colors(thumbColor = c.onSurface, activeTrackColor = c.onSurface),
                 modifier = Modifier.weight(1f).padding(horizontal = 10.dp),
             )
-            Text("☀", color = c.onSurfaceVariant, fontSize = 18.sp)
+            Text("☼", color = c.onSurfaceVariant, fontSize = 20.sp)
         }
     }
 }
@@ -568,7 +570,9 @@ fun BookToolsSheet(
             state.reparseText()
             onClose()
         }
-        if (pics == 0 || extracted > pics) {
+        // Что увидел разбор - только когда картинок не нашлось вовсе: при
+        // найденных строка «ссылок 60, вложений 78» читается шумом.
+        if (pics == 0 && extracted > 0) {
             state.parseReport()?.let { r -> PaperNote("Разбор увидел: ${r.line()}", Modifier.padding(start = 4.dp, top = 4.dp)) }
         }
         if (book?.hasAudio == true) {
