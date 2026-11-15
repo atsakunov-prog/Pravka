@@ -176,17 +176,21 @@ internal fun PagedBody(
     onTaps: (count: Int, root: Offset) -> Unit,
     /** Долгое нажатие; [fallback] - знак на случай, если палец не на строке. */
     onLongPress: (root: Offset, fallback: Int?) -> Unit,
+    /** Палец после долгого нажатия поехал: выделение тянется за ним. */
+    onLongDrag: (root: Offset) -> Unit,
     onPicture: (ShownPicture) -> Unit,
     ink: TextInk,
     keyTurn: KeyTurn?,
     /** Листать без анимации - на электронной бумаге каждый кадр мерцает. */
     instant: Boolean,
+    /** Как делить экран тапом: Settings.TAPS_*. */
+    taps: String,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
         val measurer = rememberTextMeasurer()
-        val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val topInset = readerTopInset()
+        val bottomInset = readerBottomInset()
         // Меряем по карточке, а не по экрану: её поля, скругление и место под
         // колоду тексту не принадлежат. Мерки не зависят от места в книге
         // нарочно, иначе тающая колода гоняла бы разбивку при каждом
@@ -332,7 +336,9 @@ internal fun PagedBody(
         // где он и в самом деле переворачивается - с правой страницы на
         // следующую левую; с левой на правую книга просто едет камерой.
         val curlShader = rememberCurlShader()
-        val curlOn = look.volume && look.curl && curlShader != null && !instant
+        // У «Бумаги» (16.11.2026) тоже: лист во весь экран загибается от
+        // левого края, как в книге, которую держишь в руке.
+        val curlOn = (look.volume || look.paper) && look.curl && curlShader != null && !instant
         val curl = remember { CurlState() }
         /** Оборот листа или просто переезд камеры на соседнюю страницу. */
         val leafTurn: (from: Int, forward: Boolean) -> Boolean = { from, forward ->
@@ -441,20 +447,17 @@ internal fun PagedBody(
                     pan = shape.half, leafTurn = leafTurn, sheet = sheetOf,
                     onCurlStart = ::snapshotBack, settle = settle,
                 )
-                .pointerInput(pages, shape.spread) {
+                .pointerInput(pages, shape.spread, taps) {
                     detectReaderTaps(
                         onTap = { pos ->
                             if (onTap(pos + origin)) return@detectReaderTaps
                             val slot = pagerState.currentPage
-                            val to = when {
-                                pos.x < size.width * 0.28f -> slot - 1
-                                pos.x > size.width * 0.72f -> slot + 1
-                                else -> {
-                                    onToggleBars()
-                                    return@detectReaderTaps
-                                }
+                            val dir = tapZone(taps, pos.x, pos.y, size.width.toFloat(), size.height.toFloat())
+                            if (dir == 0) {
+                                onToggleBars()
+                                return@detectReaderTaps
                             }
-                            turnTo(to, pos.y)
+                            turnTo(slot + dir, pos.y)
                         },
                         onTaps = { n, pos -> onTaps(n, pos + origin) },
                         onLongPress = { pos ->
@@ -463,6 +466,7 @@ internal fun PagedBody(
                             val at = if (shape.spread && pos.x > size.width / 2) first + 1 else first
                             onLongPress(pos + origin, pages.getOrNull(at)?.startChar)
                         },
+                        onLongDrag = { pos -> onLongDrag(pos + origin) },
                     )
                 },
         ) {
@@ -550,7 +554,7 @@ internal fun PagedBody(
                     // Просвет с оборота: у левой страницы на обороте предыдущая,
                     // у правой и единственной - следующая. Загибу оборот нужен
                     // и без просвета - как изнанка листа.
-                    val ghost = if (look.volume && (look.bleed > 0f || curlOn)) {
+                    val ghost = if ((look.volume || look.paper) && (look.bleed > 0f || curlOn)) {
                         pages.getOrNull(if (side == PageSide.LEFT) index - 1 else index + 1)
                     } else null
                     PageFace(
@@ -649,6 +653,8 @@ data class PageMarks(
     val corner: String = "",
     /** Номер внизу под линейкой, у наружного края: «46 / 380». */
     val number: String = "",
+    /** Время - во весь экран, где часов системы не видно (16.11.2026); у внутреннего края, напротив номера. */
+    val clock: String = "",
 ) {
     val head: Boolean get() = author.isNotEmpty() || title.isNotEmpty() || chapter.isNotEmpty()
     val foot: Boolean get() = number.isNotEmpty()
@@ -981,7 +987,12 @@ internal fun BoxScope.PageMarksLayer(
                 color = palette.dim.copy(alpha = 0.45f),
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                if (side != PageSide.LEFT) Spacer(Modifier.weight(1f))
+                // Время - у корешка, номер - у наружного края; на левой странице
+                // разворота времени нет: одного на разворот хватает.
+                if (side != PageSide.LEFT) {
+                    if (marks.clock.isNotEmpty()) Text(marks.clock, style = small, maxLines = 1)
+                    Spacer(Modifier.weight(1f))
+                }
                 Text(marks.number, style = small, maxLines = 1)
                 if (side == PageSide.LEFT) Spacer(Modifier.weight(1f))
             }
@@ -994,6 +1005,13 @@ internal fun BoxScope.PageMarksLayer(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(end = margins.end(side), bottom = 12.dp),
+        )
+        if (marks.clock.isNotEmpty() && side != PageSide.LEFT) Text(
+            marks.clock,
+            style = small,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = margins.start(side), bottom = 12.dp),
         )
     }
 }

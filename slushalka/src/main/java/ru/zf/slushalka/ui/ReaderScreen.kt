@@ -57,6 +57,9 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -137,6 +140,8 @@ fun ReaderScreen(
     onNeedMic: () -> Unit,
     /** Разговор о книге: место чтения и дочитана ли. */
     onTalk: (cutoff: Int, finished: Boolean) -> Unit,
+    /** Карточка этой книги - из меню книги; null - некуда. */
+    onCard: (() -> Unit)? = null,
 ) {
     val state = app.state
     val book by state.current.collectAsState()
@@ -160,6 +165,8 @@ fun ReaderScreen(
     var bars by remember { mutableStateOf(true) }
     var showRate by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    // Меню книги: карточка, картинки, разметка, разбор текста заново.
+    var showTools by remember { mutableStateOf(false) }
     var showRecap by remember { mutableStateOf(false) }
     var showChapters by remember { mutableStateOf(false) }
     var showGuide by remember { mutableStateOf(false) }
@@ -285,6 +292,56 @@ fun ReaderScreen(
         }
     }
 
+    // Во весь экран (16.11.2026): часы и кнопки системы спрятаны всё время,
+    // пока открыта книга, - и при панелях читалки тоже. Если показывать их
+    // вместе с панелями, высота страницы менялась бы на каждый тап, и книга
+    // переразбивалась бы. Смахивание от края выдвигает их поверх и само прячет.
+    val activity = remember(view) {
+        generateSequence(view.context) { (it as? android.content.ContextWrapper)?.baseContext }
+            .filterIsInstance<android.app.Activity>().firstOrNull()
+    }
+    DisposableEffect(stored.readerFullscreen, activity) {
+        val window = activity?.window
+        val controller = window?.let { androidx.core.view.WindowCompat.getInsetsController(it, view) }
+        if (stored.readerFullscreen && controller != null) {
+            controller.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { controller?.show(androidx.core.view.WindowInsetsCompat.Type.systemBars()) }
+    }
+    // Своя яркость - только пока читаешь: ночью в постели экран темнее
+    // системного минимума не нужен, а полке и плееру - системная.
+    DisposableEffect(stored.readerBrightness, activity) {
+        val window = activity?.window
+        val none = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        window?.let { w ->
+            w.attributes = w.attributes.apply {
+                screenBrightness = if (stored.readerBrightness < 0f) none else stored.readerBrightness
+            }
+        }
+        onDispose { window?.let { w -> w.attributes = w.attributes.apply { screenBrightness = none } } }
+    }
+    // Поворот - тоже только в читалке: на боку в постели телефон норовит
+    // лечь альбомом. Activity сама переживает поворот (configChanges).
+    DisposableEffect(stored.readerOrientation, activity) {
+        activity?.requestedOrientation = when (stored.readerOrientation) {
+            Settings.ORIENT_PORTRAIT -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+            Settings.ORIENT_LANDSCAPE -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+            else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        onDispose { activity?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
+    // Часов системы во весь экран не видно - время стоит на странице.
+    var clock by remember { mutableStateOf(clockNow()) }
+    LaunchedEffect(stored.readerFullscreen) {
+        while (stored.readerFullscreen) {
+            clock = clockNow()
+            val now = java.time.LocalTime.now()
+            kotlinx.coroutines.delay((60 - now.second) * 1000L - now.nano / 1_000_000 + 50)
+        }
+    }
+
     val t = text
     val bk = book
     if (t == null || bk == null) {
@@ -363,8 +420,10 @@ fun ReaderScreen(
         lineHeight = (prefs.readerSize * prefs.readerLineHeight).sp,
         fontWeight = when {
             heading -> FontWeight.Bold
-            // На электронной бумаге основной текст - на ступень жирнее.
-            eink -> FontWeight.Medium
+            // Насыщенность - своей настройкой (16.11.2026); прежде «на ступень
+            // жирнее» включалось только режимом e-ink, его набор ставит её сам.
+            prefs.readerWeight == Settings.WEIGHT_BOLD -> FontWeight.Bold
+            prefs.readerWeight == Settings.WEIGHT_MEDIUM -> FontWeight.Medium
             else -> FontWeight.Normal
         },
         // Краска чуть растекается по бумаге: еле заметный ореол того же
@@ -551,16 +610,18 @@ fun ReaderScreen(
     // Номер считается от начала самой страницы, а не от верха экрана: в
     // развороте страниц две, и на живой сборке обе показывали один и тот же
     // номер.
+    val time = if (stored.readerFullscreen) clock else ""
     val marksAt: (Int, PageNo?) -> PageMarks = { at, no ->
         val share = (at.toFloat() / t.length.coerceAtLeast(1)).coerceIn(0f, 1f)
         val page = no?.page ?: t.pageOf(at)
         val total = no?.total ?: t.pages
         when (prefs.readerFooter) {
             Settings.FOOTER_NONE -> PageMarks()
-            Settings.FOOTER_PAGE -> PageMarks(corner = "$page / $total")
-            Settings.FOOTER_PERCENT -> PageMarks(corner = "${(share * 100).roundToInt()}%")
+            Settings.FOOTER_PAGE -> PageMarks(corner = "$page / $total", clock = time)
+            Settings.FOOTER_PERCENT -> PageMarks(corner = "${(share * 100).roundToInt()}%", clock = time)
             Settings.FOOTER_BOTH -> PageMarks(
-                corner = "$page / $total · ${(share * 100).roundToInt()}%"
+                corner = "$page / $total · ${(share * 100).roundToInt()}%",
+                clock = time,
             )
             // Как в типографской книге: автор и название на верхнем поле
             // слева, глава справа (по ней открывается содержание), номер со
@@ -571,6 +632,7 @@ fun ReaderScreen(
                 title = t.title.ifBlank { bk.title },
                 chapter = t.chapterAt(at)?.title.orEmpty(),
                 number = "$page / $total",
+                clock = time,
             )
         }
     }
@@ -615,8 +677,51 @@ fun ReaderScreen(
         selectionFor(count, t, blocks, at)?.let { selection = it }
     }
 
+    // Долгое нажатие - слово под пальцем, и дальше палец тянет выделение, как
+    // в любой читалке (16.11.2026). Раньше долгое нажатие брало абзац целиком,
+    // а кусок короче или длиннее выделить было нечем.
+    var dragFrom by remember { mutableStateOf<IntRange?>(null) }
+    fun longPress(root: androidx.compose.ui.geometry.Offset, fallback: Int?) {
+        val at = hits.charAt(root, ::onScreen)
+        val word = at?.let { wordAt(t.plain, it) }
+        if (word == null) {
+            selectTaps(4, root, fallback)
+            dragFrom = selection
+            return
+        }
+        selection = word
+        dragFrom = word
+    }
+    fun longDrag(root: androidx.compose.ui.geometry.Offset) {
+        val from = dragFrom ?: return
+        val at = hits.charAt(root, ::onScreen) ?: return
+        val plain = t.plain
+        selection = if (at < from.first) {
+            var s = at
+            while (s > 0 && plain[s - 1].isLetterOrDigit()) s--
+            s..from.last
+        } else {
+            var e = at.coerceAtMost(plain.length)
+            while (e < plain.length && plain[e].isLetterOrDigit()) e++
+            from.first..maxOf(e, from.last)
+        }
+    }
+
     fun quoteOf(r: IntRange): String =
         t.plain.substring(r.first.coerceIn(0, t.length), r.last.coerceIn(r.first, t.length)).trim()
+
+    /**
+     * Заметка о странице - без выделения (16.11.2026, владелец: «нет никаких
+     * возможностей взять и записать коммент»). Привязана к первой фразе
+     * страницы: по ней заметка находится в тексте и в списке.
+     */
+    fun pageNoteRange(): IntRange {
+        val at = readPlace().coerceIn(0, (t.length - 1).coerceAtLeast(0))
+        val r = t.sentenceAt(at)
+        var e = r.last
+        while (e > r.first && t.plain.getOrNull(e - 1)?.isWhitespace() == true) e--
+        return if (e > r.first) r.first..e else at..(at + 1).coerceAtMost(t.length)
+    }
 
     fun newNote(r: IntRange, voice: Boolean) {
         val now = System.currentTimeMillis()
@@ -644,11 +749,13 @@ fun ReaderScreen(
                 onTap = ::tapText,
                 onToggleBars = { bars = !bars },
                 onTaps = { n, root -> selectTaps(n, root) },
-                onLongPress = { root, fallback -> selectTaps(4, root, fallback) },
+                onLongPress = ::longPress,
+                onLongDrag = ::longDrag,
                 onPicture = { picture = it },
                 ink = ink,
                 keyTurn = keyTurn,
                 instant = eink,
+                taps = prefs.readerTaps,
             )
         } else {
             ScrollBody(
@@ -662,10 +769,24 @@ fun ReaderScreen(
                 onTap = ::tapText,
                 onToggleBars = { bars = !bars },
                 onTaps = { n, root -> selectTaps(n, root) },
-                onLongPress = { root, fallback -> selectTaps(4, root, fallback) },
+                onLongPress = ::longPress,
+                onLongDrag = ::longDrag,
                 onPicture = { picture = it },
                 ink = ink,
                 keyTurn = keyTurn,
+                taps = prefs.readerTaps,
+            )
+        }
+
+        // Ручки выделения - поверх страницы, ниже панелей.
+        selection?.let { sel ->
+            SelectionHandles(
+                selection = sel,
+                hits = hits,
+                plain = t.plain,
+                prefer = ::onScreen,
+                color = selectionColor.copy(alpha = 1f),
+                onChange = { selection = it },
             )
         }
 
@@ -713,7 +834,7 @@ fun ReaderScreen(
                 Modifier
                     .onSizeChanged { topBarPx = it.height }
                     .fillMaxWidth()
-                    .statusBarsPadding()
+                    .padding(top = readerTopInset())
                     .padding(horizontal = maxOf(card.side, BAR_INSET), vertical = 6.dp),
             ) {
                 BarCard(palette) {
@@ -722,9 +843,12 @@ fun ReaderScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // Книге без записи плеер не нужен - «назад» ведёт на полку.
-                        TextButton(onClick = onBack) {
-                            Text(if (bk.hasAudio) "‹ Плеер" else "‹ Полка", color = palette.fg)
-                        }
+                        BarIcon(
+                            androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack,
+                            if (bk.hasAudio) "К плееру" else "На полку",
+                            palette,
+                            onClick = onBack,
+                        )
                         // Глава - она же вход в содержание: где я и куда уйти,
                         // в одном месте, а не двумя кнопками.
                         Column(
@@ -749,8 +873,11 @@ fun ReaderScreen(
                             )
                         }
                         BarIcon(Glyphs.ManageSearch, "Найти по смыслу", palette) { showSearch = true }
-                        if (hasPictures) BarIcon(Glyphs.Image, "Картинки", palette) { showGallery = true }
-                        BarIcon(Glyphs.TextFields, "Вид", palette) { showSettings = true }
+                        // «Аа» - всё, как выглядит страница, одним листом (16.11.2026).
+                        BarIcon(Glyphs.TextFields, "Вид страницы", palette) { showSettings = true }
+                        // Служебное о книге (картинки, разметка, карточка) - в своё
+                        // меню, а не в лист вида: «Аа» был свалкой и из-за этого.
+                        BarIcon(androidx.compose.material.icons.Icons.Default.MoreVert, "Книга", palette) { showTools = true }
                     }
                 }
             }
@@ -766,7 +893,7 @@ fun ReaderScreen(
                 Modifier
                     .onSizeChanged { bottomBarPx = it.height }
                     .fillMaxWidth()
-                    .navigationBarsPadding()
+                    .padding(bottom = readerBottomInset())
                     .padding(
                         start = maxOf(card.side, BAR_INSET),
                         end = maxOf(card.side, BAR_INSET),
@@ -789,7 +916,21 @@ fun ReaderScreen(
                                 onAsk(sel.last, ru.zf.slushalka.ask.Prompts.CONTEXT, quoteOf(sel))
                             },
                             onNote = { newNote(sel, voice = false) },
-                            onVoiceNote = { newNote(sel, voice = true) },
+                            onMarker = {
+                                // Маркер без слов - сразу на полях: выделил и отметил,
+                                // мысль можно дописать потом тапом по маркеру.
+                                val now = System.currentTimeMillis()
+                                app.notes.put(
+                                    bk.id,
+                                    ru.zf.slushalka.data.Note(
+                                        id = now, start = sel.first, end = sel.last,
+                                        quote = quoteOf(sel).take(NOTE_QUOTE_MAX), text = "", updatedAt = now,
+                                    ),
+                                )
+                                app.scope.launch { state.syncPush(bk.id) }
+                                notice = "Отметил маркером"
+                                selection = null
+                            },
                             onCopy = {
                                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(quoteOf(sel)))
                                 notice = "Скопировал"
@@ -826,8 +967,16 @@ fun ReaderScreen(
                                 val share = (offset * 100L / t.length.coerceAtLeast(1)).toInt().coerceIn(0, 100)
                                 Text("$share%", color = palette.dim, fontSize = 11.sp)
                                 Spacer(Modifier.width(8.dp))
-                                BookProgress(t, offset, palette, Modifier.weight(1f))
+                                // Полоску можно тянуть: отпустил - книга там (16.11.2026).
+                                BookProgress(t, offset, palette, Modifier.weight(1f)) { at ->
+                                    place = null
+                                    target = (at * t.length).toInt().coerceIn(0, (t.length - 1).coerceAtLeast(0))
+                                }
                                 Spacer(Modifier.width(8.dp))
+                                if (stored.readerFullscreen) {
+                                    Text(clock, color = palette.dim, fontSize = 11.sp)
+                                    Spacer(Modifier.width(6.dp))
+                                }
                                 LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -847,9 +996,13 @@ fun ReaderScreen(
                                     guideQuery = ""
                                     showGuide = true
                                 }
-                                // Разбор есть не у каждой книги - и кнопка только у тех, где он есть.
-                                if (razbor != null) BarAction(Glyphs.Lightbulb, "Разбор", palette) { showRazbor = true }
-                                BarAction(Glyphs.EditNote, "Пометки", palette, badge = notes.size) { showNotes = true }
+                                // Записать мысль - одной кнопкой, без выделения (16.11.2026:
+                                // «нет никаких возможностей взять и записать коммент»).
+                                // Разбор переехал в лист Claude и в карточку книги.
+                                BarAction(androidx.compose.material.icons.Icons.Default.Create, "Заметка", palette) {
+                                    newNote(pageNoteRange(), voice = false)
+                                }
+                                BarAction(Glyphs.EditNote, "Заметки", palette, badge = notes.size) { showNotes = true }
                             }
                             if (!bk.hasAudio) {
                                 speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
@@ -868,7 +1021,7 @@ fun ReaderScreen(
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
-                    .statusBarsPadding()
+                    .padding(top = readerTopInset())
                     .padding(top = drop + 4.dp)
                     .padding(horizontal = maxOf(card.side, BAR_INSET) + 12.dp),
             ) {
@@ -897,7 +1050,7 @@ fun ReaderScreen(
             Box(
                 Modifier
                     .align(Alignment.TopCenter)
-                    .statusBarsPadding()
+                    .padding(top = readerTopInset())
                     .padding(top = drop + 4.dp)
                     .padding(horizontal = maxOf(card.side, BAR_INSET) + 12.dp),
             ) {
@@ -1062,10 +1215,15 @@ fun ReaderScreen(
         ReadAloudRateDialog(app, speech.rate) { showRate = false }
     }
     if (showSettings) {
-        ReaderSettingsDialog(
-            app,
-            onGallery = { showGallery = true },
-            onClose = { showSettings = false },
+        ReaderSettingsDialog(app, onClose = { showSettings = false })
+    }
+    if (showTools) {
+        BookToolsSheet(
+            app = app,
+            onCard = onCard?.let { go -> { showTools = false; go() } },
+            onGallery = { showTools = false; showGallery = true },
+            onRazbor = razbor?.let { { showTools = false; showRazbor = true } },
+            onClose = { showTools = false },
         )
     }
     if (showGallery) {
@@ -1219,7 +1377,7 @@ private fun ColumnScope.SelectionBar(
     onAsk: () -> Unit,
     onContext: () -> Unit,
     onNote: () -> Unit,
-    onVoiceNote: () -> Unit,
+    onMarker: () -> Unit,
     onCopy: () -> Unit,
     onMore: () -> Unit,
     onClear: () -> Unit,
@@ -1236,11 +1394,13 @@ private fun ColumnScope.SelectionBar(
         )
         TextButton(onClick = onClear) { Text("Снять", color = palette.fg, fontSize = 12.sp) }
     }
+    // Заметка - первой: ради неё чаще всего и выделяют (16.11.2026). Голосом -
+    // микрофоном в самой заметке; маркер - выделить без слов.
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        BarAction(androidx.compose.material.icons.Icons.Default.Create, "Заметка", palette, onClick = onNote)
+        BarAction(Glyphs.Brush, "Маркер", palette, onClick = onMarker)
         BarAction(Glyphs.QuestionAnswer, "Спросить", palette, onClick = onAsk)
         BarAction(Glyphs.TravelExplore, "Контекст", palette, onClick = onContext)
-        BarAction(Glyphs.EditNote, "Пометка", palette, onClick = onNote)
-        BarAction(Glyphs.Mic, "Голосом", palette, onClick = onVoiceNote)
         BarAction(Glyphs.ContentCopy, "Копия", palette, onClick = onCopy)
         BarAction(Glyphs.FormatQuote, "Ещё", palette, onClick = onMore)
     }

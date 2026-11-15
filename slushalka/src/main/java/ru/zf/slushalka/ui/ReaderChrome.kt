@@ -27,6 +27,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -64,6 +70,7 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,6 +108,12 @@ suspend fun PointerInputScope.detectReaderTaps(
     onTap: (Offset) -> Unit,
     onTaps: (count: Int, Offset) -> Unit,
     onLongPress: (Offset) -> Unit,
+    /**
+     * Палец после долгого нажатия поехал - выделение тянется за ним, как в
+     * любой читалке (16.11.2026: выделить кусок для заметки иначе было нечем,
+     * кроме серии тапов).
+     */
+    onLongDrag: (Offset) -> Unit = {},
 ) = coroutineScope {
     var series = 0
     var lastUp = 0L
@@ -122,10 +135,17 @@ suspend fun PointerInputScope.detectReaderTaps(
             series = 0
             if (!cancelled) {
                 onLongPress(down.position)
-                // Остаток жеста - тот же палец, пусть его не примут за смахивание.
+                // Остаток жеста - тот же палец, пусть его не примут за
+                // смахивание; куда он едет - туда тянется выделение.
+                var last = down.position
                 do {
                     val event = awaitPointerEvent()
                     event.changes.forEach { it.consume() }
+                    val at = event.changes.firstOrNull { it.pressed }?.position
+                    if (at != null && (at - last).getDistance() > 4f) {
+                        last = at
+                        onLongDrag(at)
+                    }
                 } while (event.changes.any { it.pressed })
             }
             return@awaitEachGesture
@@ -145,6 +165,25 @@ suspend fun PointerInputScope.detectReaderTaps(
             // Пятый тап начинает заново, а не держит абзац вечно.
             if (series >= 4) series = 0
         }
+    }
+}
+
+/**
+ * Куда ведёт тап по странице: -1 - назад, +1 - вперёд, 0 - панели.
+ * «Края листают» - как было: края листают, середина - панели. «Вперёд везде»
+ * - для одной руки: назад только левый край, панели - верхняя полоса,
+ * остальное вперёд.
+ */
+fun tapZone(taps: String, x: Float, y: Float, width: Float, height: Float): Int = when (taps) {
+    ru.zf.slushalka.data.Settings.TAPS_FORWARD -> when {
+        y < height * 0.15f -> 0
+        x < width * 0.25f -> -1
+        else -> 1
+    }
+    else -> when {
+        x < width * 0.28f -> -1
+        x > width * 0.72f -> 1
+        else -> 0
     }
 }
 
@@ -253,6 +292,25 @@ fun inkColors(palette: ReaderPalette, eink: Boolean = false): Pair<Color, Color>
 
 /** Отступ плашки от края экрана, когда у страницы своего поля нет. */
 val BAR_INSET = 10.dp
+
+/**
+ * Сверху у читалки: строка состояния, а во весь экран (её нет) - вырез
+ * камеры, чтобы буквы не уходили под глазок. Разбивка на страницы и рисунок
+ * страницы берут одно и то же число, иначе низ полосы расходится.
+ */
+@Composable
+fun readerTopInset(): androidx.compose.ui.unit.Dp =
+    WindowInsets.statusBars.union(WindowInsets.displayCutout)
+        .asPaddingValues().calculateTopPadding()
+
+/** Снизу у читалки: панель навигации, а во весь экран - только вырез, если он внизу. */
+@Composable
+fun readerBottomInset(): androidx.compose.ui.unit.Dp =
+    WindowInsets.navigationBars.union(WindowInsets.displayCutout)
+        .asPaddingValues().calculateBottomPadding()
+
+/** Время для страницы во весь экран: часов системы не видно, а который час, знать хочется. */
+fun clockNow(): String = java.time.LocalTime.now().let { "%d:%02d".format(it.hour, it.minute) }
 
 private val BAR_SHAPE = RoundedCornerShape(18.dp)
 
@@ -372,11 +430,47 @@ fun BarIcon(icon: ImageVector, label: String, palette: ReaderPalette, onClick: (
  * Цифры рядом, а полоска для глаза: сколько осталось, видно без счёта.
  */
 @Composable
-fun BookProgress(text: BookText, offset: Int, palette: ReaderPalette, modifier: Modifier = Modifier) {
+fun BookProgress(
+    text: BookText,
+    offset: Int,
+    palette: ReaderPalette,
+    modifier: Modifier = Modifier,
+    /**
+     * Полоску можно тянуть и тапать (16.11.2026): отпустил - книга там. Пока
+     * тянешь, бегунок показывает, куда придёшь. null - только показывает.
+     */
+    onSeek: ((Float) -> Unit)? = null,
+) {
     val length = text.length.coerceAtLeast(1)
-    val share = (offset.toFloat() / length).coerceIn(0f, 1f)
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    val share = dragging ?: (offset.toFloat() / length).coerceIn(0f, 1f)
     val ticks = remember(text) { text.chapters.map { it.start.toFloat() / length } }
-    Canvas(modifier.fillMaxWidth().height(10.dp)) {
+    val seek by androidx.compose.runtime.rememberUpdatedState(onSeek)
+    Canvas(
+        modifier
+            .fillMaxWidth()
+            .height(if (onSeek != null) 24.dp else 10.dp)
+            .then(
+                if (onSeek == null) Modifier else Modifier.pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        down.consume()
+                        var at = (down.position.x / size.width).coerceIn(0f, 1f)
+                        dragging = at
+                        while (true) {
+                            val e = awaitPointerEvent()
+                            val c = e.changes.firstOrNull() ?: break
+                            c.consume()
+                            if (!c.pressed) break
+                            at = (c.position.x / size.width).coerceIn(0f, 1f)
+                            dragging = at
+                        }
+                        dragging = null
+                        seek?.invoke(at)
+                    }
+                }
+            ),
+    ) {
         val y = size.height / 2
         val h = 3.dp.toPx()
         val round = androidx.compose.ui.geometry.CornerRadius(h / 2, h / 2)
@@ -392,6 +486,7 @@ fun BookProgress(text: BookText, offset: Int, palette: ReaderPalette, modifier: 
             size = androidx.compose.ui.geometry.Size(size.width * share, h),
             cornerRadius = round,
         )
+        if (dragging != null) drawCircle(palette.fg, radius = 7.dp.toPx(), center = Offset(size.width * share, y))
         // Засечки глав - только если их не частокол: у сборника рассказов на
         // сотню глав полоска превратилась бы в штрихкод.
         if (ticks.size in 2..60) {
@@ -426,7 +521,7 @@ fun ClaudeSheet(app: SlushalkaApp, actions: List<ClaudeAction>, onClose: () -> U
             PaperRow(a.icon, a.title, a.hint) { onClose(); a.run() }
         }
         Spacer(Modifier.height(8.dp))
-        PaperNote("Выдели слово двумя тапами, фразу - тремя, абзац - четырьмя, и спроси прямо про кусок.")
+        PaperNote("Зажми слово и веди палец - выделится кусок; ручками его можно подправить. Про кусок можно спросить или записать заметку.")
     }
 }
 
@@ -481,7 +576,7 @@ fun NoteEditor(
         app = app,
         onClose = onClose,
         icon = Glyphs.EditNote,
-        title = if (note.text.isBlank()) "Пометка" else "Пометка на полях",
+        title = if (note.text.isBlank()) "Заметка" else "Заметка на полях",
         actions = {
             if (onDelete != null) PaperIconButton(Icons.Default.Delete, "Удалить", onClick = onDelete)
         },
@@ -544,9 +639,9 @@ fun NotesSheet(
 
     /** Пометки (или конспект) - в Word и сразу отдать: почта, мессенджер, Диск. */
     fun toWord(digest: String?) {
-        val file = Share.file(context, (if (digest != null) "Конспект - " else "Пометки - ") + title + ".docx")
+        val file = Share.file(context, (if (digest != null) "Конспект - " else "Заметки - ") + title + ".docx")
         ru.zf.slushalka.data.Docx.write(file, Share.notesDocx(text, title, notes, digest))
-        Share.send(context, file, Share.DOCX, (if (digest != null) "Конспект: " else "Пометки: ") + title)
+        Share.send(context, file, Share.DOCX, (if (digest != null) "Конспект: " else "Заметки: ") + title)
     }
 
     fun digest() {
@@ -565,17 +660,17 @@ fun NotesSheet(
         val body = notesAsText(text, notes, title)
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "Пометки: $title")
+            putExtra(Intent.EXTRA_SUBJECT, "Заметки: $title")
             putExtra(Intent.EXTRA_TEXT, body)
         }
-        runCatching { context.startActivity(Intent.createChooser(send, "Поделиться пометками")) }
+        runCatching { context.startActivity(Intent.createChooser(send, "Поделиться заметками")) }
     }
 
     PaperSheet(
         app = app,
         onClose = onClose,
         icon = Glyphs.EditNote,
-        title = "Пометки",
+        title = "Заметки",
         subtitle = if (notes.isEmpty()) title else "$title · ${notes.size}",
         tall = notes.size > 4,
         scroll = false,
@@ -583,8 +678,8 @@ fun NotesSheet(
         if (notes.isEmpty()) {
             Spacer(Modifier.height(16.dp))
             PaperNote(
-                "Пока пусто. Выдели кусок - двойной тап по слову, тройной по фразе, четверной по " +
-                    "абзацу - и нажми «Пометка». Её можно надиктовать.",
+                "Пока пусто. «Заметка» внизу читалки - мысль о странице. Или зажми слово, веди палец до " +
+                    "конца куска и нажми «Заметка» - или «Маркер», чтобы просто отметить. Заметку можно надиктовать.",
             )
             return@PaperSheet
         }
@@ -599,7 +694,7 @@ fun NotesSheet(
         error?.let { PaperError(it) }
         if (busy == null) {
             PaperNote(
-                "«В Word» - пометки как есть. «Конспект» - Claude свяжет цитаты и твои мысли в текст по главам.",
+                "«В Word» - заметки как есть. «Конспект» - Claude свяжет цитаты и твои мысли в текст по главам.",
                 Modifier.padding(top = 8.dp),
             )
         }

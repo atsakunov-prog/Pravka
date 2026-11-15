@@ -155,16 +155,20 @@ internal fun ScrollBody(
     onTaps: (count: Int, root: Offset) -> Unit,
     /** Долгое нажатие; [fallback] - знак на случай, если палец не на строке. */
     onLongPress: (root: Offset, fallback: Int?) -> Unit,
+    /** Палец после долгого нажатия поехал: выделение тянется за ним. */
+    onLongDrag: (root: Offset) -> Unit,
     onPicture: (ShownPicture) -> Unit,
     ink: TextInk,
     /** Кнопка листания: вперёд или назад на страницу по строкам. */
     keyTurn: KeyTurn?,
+    /** Как делить экран тапом: Settings.TAPS_*. */
+    taps: String,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
-    val statusPx = with(density) { WindowInsets.statusBars.asPaddingValues().calculateTopPadding().roundToPx() }
-    val navPx = with(density) { WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding().roundToPx() }
+    val statusPx = with(density) { readerTopInset().roundToPx() }
+    val navPx = with(density) { readerBottomInset().roundToPx() }
     // Где на экране лежит сам список - границы строк из [hits] даны в
     // координатах корня, и сравнивать их надо в одних единицах. Экран (корень)
     // и список теперь не одно и то же: список сидит внутри страницы, между
@@ -237,8 +241,8 @@ internal fun ScrollBody(
     }
 
     val card = cardMetrics(look, shape)
-    val safeTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val safeBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val safeTop = readerTopInset()
+    val safeBottom = readerBottomInset()
     Box(
         Modifier
             .fillMaxSize()
@@ -247,12 +251,12 @@ internal fun ScrollBody(
                 screenTop = origin.y
                 screenBottom = screenTop + it.size.height
             }
-            .pointerInput(Unit) {
+            .pointerInput(taps) {
                 detectReaderTaps(
                     onTap = { pos ->
-                        if (!onTap(pos + origin)) when {
-                            pos.x < size.width * 0.28f -> scope.launch { pageBack() }
-                            pos.x > size.width * 0.72f -> scope.launch { listState.animateScrollBy(stepForward()) }
+                        if (!onTap(pos + origin)) when (tapZone(taps, pos.x, pos.y, size.width.toFloat(), size.height.toFloat())) {
+                            -1 -> scope.launch { pageBack() }
+                            1 -> scope.launch { listState.animateScrollBy(stepForward()) }
                             else -> onToggleBars()
                         }
                     },
@@ -265,6 +269,7 @@ internal fun ScrollBody(
                         }
                         onLongPress(pos + origin, blocks.getOrNull(hit?.index ?: -1)?.start)
                     },
+                    onLongDrag = { pos -> onLongDrag(pos + origin) },
                 )
             },
     ) {

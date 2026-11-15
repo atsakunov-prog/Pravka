@@ -246,6 +246,10 @@ data class PageLook(
 ) {
     val volume: Boolean get() = style == Settings.PAGE_VOLUME
     val flat: Boolean get() = style == Settings.PAGE_FLAT
+    /** Бумага во весь экран: лист книги без переплёта и стола (16.11.2026). */
+    val paper: Boolean get() = style == Settings.PAGE_PAPER
+    /** Страница во весь экран, без полей стола: плоско и бумага - места под текст столько же. */
+    val full: Boolean get() = flat || paper
 }
 
 /** Книга: сколько в ней бумаги, сколько её позади и как она разложена. */
@@ -349,7 +353,7 @@ fun rimsNow(metrics: CardMetrics, shape: BookShape): Int {
 }
 
 fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.style) {
-    Settings.PAGE_FLAT -> CardMetrics(0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0, 0.dp, 0.dp, 0.dp, 0.dp)
+    Settings.PAGE_FLAT, Settings.PAGE_PAPER -> CardMetrics(0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0.dp, 0, 0.dp, 0.dp, 0.dp, 0.dp)
 
     Settings.PAGE_VOLUME -> CardMetrics(
         side = look.margin,
@@ -419,7 +423,7 @@ fun cardMetrics(look: PageLook, shape: BookShape): CardMetrics = when (look.styl
 data class PageChrome(val width: Dp, val height: Dp)
 
 fun pageChrome(look: PageLook, card: CardMetrics, halves: Int, half: Boolean = false): PageChrome = when {
-    look.flat -> PageChrome(0.dp, 0.dp)
+    look.full -> PageChrome(0.dp, 0.dp)
     // Половина разворота: с одной стороны край книги, с другой - корешок и
     // полоска соседней страницы за ним.
     look.volume && half -> PageChrome(
@@ -455,7 +459,12 @@ fun pagePadding(
     /** Половина разворота: за корешком видна полоска соседней страницы. */
     half: Boolean = false,
 ): PaddingValues {
-    if (look.flat) return PaddingValues(0.dp)
+    // Страница во весь экран - от строки состояния до панели навигации, а не
+    // под ними: до 16.11.2026 плоская лежала от самого верха экрана, и её
+    // колонтитул попадал под часы, а разбивка вычитала полосы системы из
+    // высоты - внизу пропадала пара строк. Во весь экран полос нет, и отступ
+    // ноль (кроме выреза камеры).
+    if (look.full) return PaddingValues(top = safeTop, bottom = safeBottom)
     val under = underPadding(card, safeTop, safeBottom)
     if (!look.volume) return under
     // На половине разворота страница стоит там, где она окажется, когда
@@ -497,7 +506,7 @@ fun underPadding(card: CardMetrics, safeTop: Dp, safeBottom: Dp): PaddingValues 
  * тень, а не шум.
  */
 fun Modifier.readerBackdrop(tones: PaperTones, look: PageLook): Modifier =
-    if (look.flat) this.background(tones.paper)
+    if (look.full) this.background(tones.paper)
     else this
         .background(if (look.volume) tones.bookTable else tones.backdrop)
         .drawWithCache {
@@ -531,7 +540,7 @@ fun Modifier.pageUnder(
     /** Края обложки книги для загибки переплёта; null - картон одним цветом. */
     edges: CoverEdges? = null,
 ): Modifier {
-    if (look.flat || look.style == Settings.PAGE_SOFT) return this
+    if (look.full || look.style == Settings.PAGE_SOFT) return this
     val m = cardMetrics(look, shape)
     val lift = when (look.shadow) {
         Settings.SHADOW_NONE -> 0.dp
@@ -1177,6 +1186,7 @@ fun Modifier.pageSheet(
     side: PageSide,
 ): Modifier {
     if (look.flat) return this.background(tones.paper)
+    if (look.paper) return this.paperLeaf(tones, look, shape, side)
     val m = cardMetrics(look, shape)
     if (look.volume) {
         // Внешние углы листа скруглены на точку с небольшим: бумага в книге
@@ -1318,6 +1328,77 @@ fun Modifier.pageSheet(
         )
         .then(if (look.grain) Modifier.matte(tones.paper, tones.paperFine, tones.paperFibers, PAPER_FIBERS) else Modifier)
 }
+
+/**
+ * Лист «Бумаги» во весь экран (16.11.2026). Владелец читал только плоско:
+ * «красивые все виды сужают полезное пространство». Здесь красота не
+ * отнимает ни точки - она нарисована в полях самой страницы: та же бумага,
+ * что у книжного листа (мелкое зерно, волокна, облачность), свет из
+ * верхнего левого угла, узкая тень сгиба у корешка - в пределах поля, и у
+ * наружного края несколько волосяных кромок блока: сколько книги впереди
+ * (у левой страницы разворота - сколько позади). Кромки тают по мере чтения,
+ * как колода у «Стопки».
+ */
+private fun Modifier.paperLeaf(tones: PaperTones, look: PageLook, shape: BookShape, side: PageSide): Modifier =
+    this
+        .background(tones.paper)
+        .drawWithCache {
+            val w = size.width
+            val h = size.height
+            val dp = 1.dp.toPx()
+            val gutterLeft = side != PageSide.LEFT
+            // Сгиб уже книжного: тень не заходит в текст, она живёт в поле.
+            val band = (w * 0.07f).coerceIn(10f * dp, 22f * dp)
+            val stops = arrayOf(
+                0f to tones.cast(0.20f),
+                0.25f to tones.cast(0.09f),
+                0.6f to tones.cast(0.025f),
+                1f to Color.Transparent,
+            )
+            val fold = if (gutterLeft) Brush.horizontalGradient(*stops, startX = 0f, endX = band)
+            else Brush.horizontalGradient(*stops, startX = w, endX = w - band)
+            val foldAt = if (gutterLeft) Offset.Zero else Offset(w - band, 0f)
+            val fall = Brush.linearGradient(
+                0f to tones.light(0.07f),
+                0.5f to Color.Transparent,
+                1f to tones.cast(0.04f),
+                start = Offset.Zero,
+                end = Offset(w, h),
+            )
+            // Углы чуть темнее середины: лист лежит под лампой, а не светится сам.
+            val corners = Brush.radialGradient(
+                0.62f to Color.Transparent,
+                1f to tones.cast(0.06f),
+                center = Offset(w * 0.5f, h * 0.45f),
+                radius = max(w, h) * 0.78f,
+            )
+            val fine = if (look.grain) matteBrush(tones.paper, FINE_SEED, 1f) else null
+            val fibers = if (look.grain) matteBrush(tones.paper, FIBERS_SEED, PAPER_FIBERS.toPx()) else null
+            val clouds = if (look.grain) matteBrush(tones.paper, CLOUDS_SEED, PAPER_CLOUDS.toPx()) else null
+            // Кромки блока: у правой и единственной - сколько впереди, у левой -
+            // сколько позади. Толстой книге - до четырёх, повести - одна.
+            val most = (shape.thickness.value / 4f).toInt().coerceIn(1, 4)
+            val share = if (side == PageSide.LEFT) shape.progress else 1f - shape.progress
+            val rims = if (share < 0.02f) 0 else ceil(most * share).toInt().coerceIn(1, most)
+            onDrawWithContent {
+                fine?.let { drawRect(it, alpha = tones.paperFine) }
+                fibers?.let { drawRect(it, alpha = tones.paperFibers) }
+                clouds?.let { drawRect(it, alpha = tones.paperClouds) }
+                drawRect(fall)
+                drawRect(corners)
+                drawContent()
+                if (look.press) fine?.let { drawRect(it, alpha = tones.paperFine * 0.45f) }
+                drawRect(fold, topLeft = foldAt, size = Size(band, h))
+                for (i in 0 until rims) {
+                    val x = (1.2f + 2.4f * i) * dp
+                    drawRect(
+                        tones.cast(0.16f - 0.03f * i),
+                        topLeft = Offset(if (gutterLeft) w - x - 0.6f * dp else x, 0f),
+                        size = Size(0.6f * dp, h),
+                    )
+                }
+            }
+        }
 
 /**
  * Насколько страница сдвинута от своего места: 0 - лежит сверху, 1 - смахнута,

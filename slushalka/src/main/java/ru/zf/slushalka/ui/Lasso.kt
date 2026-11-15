@@ -5,7 +5,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -50,12 +52,24 @@ class TextHits {
 
     private val map = HashMap<Int, Hit>()
 
+    /**
+     * Сколько раз текст на экране сдвинулся или переложился. Читают его только
+     * ручки выделения: им надо ехать вместе с текстом при прокрутке и
+     * перелистывании, а сам реестр - не состояние Compose.
+     */
+    val moves = androidx.compose.runtime.mutableIntStateOf(0)
+
     fun place(start: Int, bounds: Rect) {
-        map.getOrPut(start) { Hit(start) }.bounds = bounds
+        val hit = map.getOrPut(start) { Hit(start) }
+        if (hit.bounds != bounds) {
+            hit.bounds = bounds
+            moves.intValue++
+        }
     }
 
     fun layout(start: Int, layout: TextLayoutResult) {
         map.getOrPut(start) { Hit(start) }.layout = layout
+        moves.intValue++
     }
 
     fun forget(start: Int) {
@@ -99,6 +113,26 @@ class TextHits {
     }
 
     /**
+     * Где на экране стоит знак книги [at] - прямоугольник курсора перед ним, в
+     * координатах корня. Для ручек выделения: они висят у начала и у конца
+     * выделенного. [prefer] - как в [charAt]: кусок на видимой странице, а не на
+     * соседней прозрачной. null - знак не на экране.
+     */
+    fun cursorAt(at: Int, prefer: (Int) -> Boolean = { true }): Rect? {
+        var fallback: Rect? = null
+        for (h in map.values) {
+            val b = h.bounds ?: continue
+            val l = h.layout ?: continue
+            val len = l.layoutInput.text.length
+            if (at < h.start || at > h.start + len) continue
+            val r = l.getCursorRect((at - h.start).coerceIn(0, len)).translate(b.topLeft)
+            if (prefer(h.start)) return r
+            if (fallback == null) fallback = r
+        }
+        return fallback
+    }
+
+    /**
      * Знаки книги под прямоугольником (в координатах корня экрана). Внутри
      * каждого задетого куска берётся от знака под левым верхним углом до знака
      * под правым нижним: обвёл три строки - получил с начала первой задетой
@@ -122,6 +156,111 @@ class TextHits {
         }
         return if (to > from) from..to else null
     }
+}
+
+/**
+ * Ручки выделения (16.11.2026): капли у начала и у конца выделенного, как в
+ * любой читалке. Тянешь - край едет за пальцем по целым словам. До них кусок
+ * для заметки выделялся только серией тапов: слово, фраза или абзац, и ни
+ * буквой больше - владелец так и не нашёл, как записать мысль к месту.
+ *
+ * Слой во весь экран без своих жестов: тапы мимо капель проходят к странице.
+ */
+@Composable
+fun SelectionHandles(
+    selection: IntRange,
+    hits: TextHits,
+    plain: String,
+    prefer: (Int) -> Boolean,
+    color: androidx.compose.ui.graphics.Color,
+    onChange: (IntRange) -> Unit,
+) {
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    // Ручки едут вместе с текстом: перечитать места, когда он сдвинулся.
+    @Suppress("UNUSED_VARIABLE") val moved = hits.moves.intValue
+    val current by androidx.compose.runtime.rememberUpdatedState(selection)
+    Box(Modifier.fillMaxSize().onGloballyPositioned { origin = it.positionInRoot() }) {
+        for (isStart in listOf(true, false)) {
+            val at = if (isStart) selection.first else selection.last
+            val r = hits.cursorAt(at, prefer) ?: continue
+            // key: у каждой капли своё состояние перетаскивания, даже когда
+            // начальная ушла с экрана и в цикле осталась одна конечная.
+            androidx.compose.runtime.key(isStart) {
+            Handle(
+                cursor = Rect(r.left - origin.x, r.top - origin.y, r.right - origin.x, r.bottom - origin.y),
+                color = color,
+                onDrag = { point ->
+                    val root = point + origin
+                    val hit = hits.charAt(root, prefer) ?: return@Handle
+                    val sel = current
+                    val next = if (isStart) {
+                        var s = hit.coerceAtMost(sel.last - 1)
+                        while (s > 0 && plain[s - 1].isLetterOrDigit()) s--
+                        s..sel.last
+                    } else {
+                        var e = hit.coerceAtLeast(sel.first + 1).coerceAtMost(plain.length)
+                        while (e < plain.length && plain[e].isLetterOrDigit()) e++
+                        sel.first..e
+                    }
+                    if (next.last > next.first && next != sel) onChange(next)
+                },
+            )
+            }
+        }
+    }
+}
+
+/**
+ * Одна капля: черта ровно на границе знака во всю высоту строки и круг под
+ * строкой. [cursor] - в координатах слоя.
+ *
+ * Рисунок едет за выделением сразу, а место под палец на время перетаскивания
+ * замирает там, где его взяли: иначе ход пальца мерился бы от места, которое
+ * само уезжает, и капля прыгала бы. Выделение тянется за серединой строки
+ * плюс ход пальца - палец держит каплю под строкой и не закрывает слово.
+ */
+@Composable
+private fun Handle(
+    cursor: Rect,
+    color: androidx.compose.ui.graphics.Color,
+    onDrag: (Offset) -> Unit,
+) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val touch = with(density) { 48.dp.toPx() }
+    val radius = with(density) { 7.dp.toPx() }
+    val stroke = with(density) { 2.dp.toPx() }
+    Canvas(Modifier.fillMaxSize()) {
+        drawLine(color, Offset(cursor.left, cursor.top), Offset(cursor.left, cursor.bottom + radius * 0.5f), strokeWidth = stroke)
+        drawCircle(color, radius = radius, center = Offset(cursor.left, cursor.bottom + radius * 1.3f))
+    }
+    val live by androidx.compose.runtime.rememberUpdatedState(cursor)
+    val drag by androidx.compose.runtime.rememberUpdatedState(onDrag)
+    var frozen by remember { mutableStateOf<Rect?>(null) }
+    var moved by remember { mutableStateOf(Offset.Zero) }
+    val anchor = frozen ?: cursor
+    Box(
+        Modifier
+            .offset {
+                androidx.compose.ui.unit.IntOffset(
+                    (anchor.left - touch / 2).toInt(),
+                    (anchor.bottom - touch * 0.1f).toInt(),
+                )
+            }
+            .size(48.dp)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { frozen = live; moved = Offset.Zero },
+                    onDragEnd = { frozen = null },
+                    onDragCancel = { frozen = null },
+                    onDrag = { change, delta ->
+                        change.consume()
+                        moved += delta
+                        val a = frozen ?: return@detectDragGestures
+                        drag(Offset(a.left, a.center.y) + moved)
+                    },
+                )
+            },
+    )
 }
 
 /** Обводка редко ложится точно по границам слов - раздвигаем до целых. */

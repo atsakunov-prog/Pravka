@@ -196,16 +196,23 @@ fun PaperSheet(
     subtitle: String? = null,
     tall: Boolean = false,
     scroll: Boolean = true,
+    /**
+     * Лист «Вид» (16.11.2026): без затемнения и не выше 60% окна - книга над
+     * ним видна целиком и меняется на глазах, пока крутишь шрифт и бумагу.
+     */
+    seeThrough: Boolean = false,
     actions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     PaperTheme(app) {
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val eink = LocalEink.current
-        val ceiling = sheetCeiling()
+        val window = LocalWindowInfo.current.containerSize.height
+        val ceiling = sheetCeiling().let { if (seeThrough && window > 0) minOf(it, (window * 0.6f).toInt()) else it }
         ModalBottomSheet(
             onDismissRequest = onClose,
             sheetState = sheet,
+            scrimColor = if (seeThrough) Color.Transparent else androidx.compose.material3.BottomSheetDefaults.ScrimColor,
             // Лист «прыгал» вверх-вниз, когда список доезжал до низа (08.10.2026,
             // «Разбор»). Материал отступает от строки состояния на столько, на
             // сколько лист до неё не доехал, - высота листа зависела от того, где

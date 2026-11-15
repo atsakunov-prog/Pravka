@@ -129,6 +129,21 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerDevice: String = DEVICE_PHONE,
         /** Листать кнопками громкости, когда ничего не звучит. */
         val readerVolumeKeys: Boolean = false,
+        /**
+         * Во весь экран: часы и кнопки системы спрятаны, пока читаешь, - их
+         * место отдано тексту (16.11.2026, владелец: «красивые виды сужают
+         * полезное пространство»). Время тогда стоит внизу страницы. Полосы
+         * системы выдвигаются смахиванием от края и уходят сами.
+         */
+        val readerFullscreen: Boolean = true,
+        /** Яркость экрана в читалке: меньше нуля - как в системе, иначе 0..1. */
+        val readerBrightness: Float = -1f,
+        /** Насыщенность букв: обычные, плотнее, жирные - тонкий штрих на e-ink и мелком кегле выцветает. */
+        val readerWeight: String = WEIGHT_NORMAL,
+        /** Что делает тап: края листают, середина - панели; или весь экран вперёд, левый край - назад. */
+        val readerTaps: String = TAPS_EDGES,
+        /** Поворот экрана в читалке: как телефон, только книжно или только альбомно. */
+        val readerOrientation: String = ORIENT_AUTO,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -273,6 +288,11 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerDevice = p[KEY_R_DEVICE]?.takeIf { it in DEVICES }
                     ?: if (p[KEY_R_EINK] ?: EinkDevice.likely) DEVICE_EINK_LOW else DEVICE_PHONE,
                 readerVolumeKeys = p[KEY_R_VOLKEYS] ?: EinkDevice.likely,
+                readerFullscreen = p[KEY_R_FULLSCREEN] ?: true,
+                readerBrightness = p[KEY_R_BRIGHTNESS] ?: -1f,
+                readerWeight = p[KEY_R_WEIGHT]?.takeIf { it in WEIGHTS } ?: WEIGHT_NORMAL,
+                readerTaps = p[KEY_R_TAPS]?.takeIf { it in TAPS } ?: TAPS_EDGES,
+                readerOrientation = p[KEY_R_ORIENT]?.takeIf { it in ORIENTS } ?: ORIENT_AUTO,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -384,7 +404,80 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         it[KEY_R_PAGE_STYLE] = PAGE_VOLUME
     }
     suspend fun setReaderIndent(v: Boolean) = edit { it[KEY_R_INDENT] = v }
-    suspend fun setReaderDevice(v: String) = edit { if (v in DEVICES) it[KEY_R_DEVICE] = v }
+    suspend fun setReaderFullscreen(v: Boolean) = edit { it[KEY_R_FULLSCREEN] = v }
+    suspend fun setReaderBrightness(v: Float) = edit { it[KEY_R_BRIGHTNESS] = if (v < 0f) -1f else v.coerceIn(0.01f, 1f) }
+    suspend fun setReaderWeight(v: String) = edit { if (v in WEIGHTS) it[KEY_R_WEIGHT] = v }
+    suspend fun setReaderTaps(v: String) = edit { if (v in TAPS) it[KEY_R_TAPS] = v }
+    suspend fun setReaderOrientation(v: String) = edit { if (v in ORIENTS) it[KEY_R_ORIENT] = v }
+
+    /**
+     * Устройство - разовый набор, а не вечная подмена (16.11.2026). Раньше
+     * режим читалки подменял выбранное на время чтения: на Boox выбирали
+     * «Книжный» - и видели плоско, менять вид приходилось «в трёх местах».
+     * Теперь выбор устройства один раз выставляет то, что электронной бумаге
+     * идёт, и дальше что выбрано - то и на экране. Остаётся только то, без
+     * чего e-ink мерцает: страницами и без анимаций ([readerView]).
+     */
+    suspend fun setReaderDevice(v: String) = edit {
+        if (v !in DEVICES) return@edit
+        val was = it[KEY_R_DEVICE] ?: if (it[KEY_R_EINK] ?: EinkDevice.likely) DEVICE_EINK_LOW else DEVICE_PHONE
+        if (was == v) return@edit
+        it[KEY_R_DEVICE] = v
+        applyDevicePreset(it, was, v)
+        it[KEY_DEVICE_PRESET] = DEVICE_PRESET_VERSION
+    }
+
+    /**
+     * Один раз после обновления: у читалки, жившей подменой, то, что она
+     * показывала, становится сохранённым - после обновления на экране ничего
+     * не меняется, а дальше вид правится в одном месте.
+     */
+    suspend fun migrateDevicePreset() = edit {
+        if ((it[KEY_DEVICE_PRESET] ?: 0) >= DEVICE_PRESET_VERSION) return@edit
+        val device = it[KEY_R_DEVICE]?.takeIf { d -> d in DEVICES }
+            ?: if (it[KEY_R_EINK] ?: EinkDevice.likely) DEVICE_EINK_LOW else DEVICE_PHONE
+        applyDevicePreset(it, DEVICE_PHONE, device)
+        it[KEY_DEVICE_PRESET] = DEVICE_PRESET_VERSION
+    }
+
+    private fun applyDevicePreset(p: androidx.datastore.preferences.core.MutablePreferences, from: String, to: String) {
+        val size = p[KEY_R_SIZE] ?: 19
+        when (to) {
+            DEVICE_EINK_LOW -> {
+                p[KEY_R_PAGED] = true
+                p[KEY_R_PAGE_STYLE] = PAGE_FLAT
+                p[KEY_R_SHADOW] = SHADOW_NONE
+                p[KEY_R_BEVEL] = false
+                p[KEY_R_SHEEN] = false
+                p[KEY_R_GRAIN] = false
+                p[KEY_R_IMPERFECT] = false
+                p[KEY_R_BLEED] = false
+                p[KEY_R_BOOK_TURN] = BOOK_TURN_FADE
+                p[KEY_R_WEIGHT] = WEIGHT_MEDIUM
+                p[KEY_R_THEME] = if (p[KEY_R_THEME] == THEME_BLACK) THEME_EINK_NIGHT else THEME_EINK
+                if (from != DEVICE_EINK_LOW) p[KEY_R_SIZE] = (size + EINK_SIZE_BOOST).coerceIn(12, 34)
+            }
+            DEVICE_EINK_HIGH -> {
+                p[KEY_R_PAGED] = true
+                p[KEY_R_GRAIN] = false
+                p[KEY_R_BOOK_TURN] = BOOK_TURN_FADE
+                p[KEY_R_WEIGHT] = WEIGHT_MEDIUM
+                if (from == DEVICE_EINK_LOW) {
+                    p[KEY_R_SIZE] = (size - EINK_SIZE_BOOST).coerceIn(12, 34)
+                    if (p[KEY_R_THEME] == THEME_EINK) p[KEY_R_THEME] = THEME_PAPER
+                    if (p[KEY_R_THEME] == THEME_EINK_NIGHT) p[KEY_R_THEME] = THEME_BLACK
+                }
+            }
+            else -> if (from != DEVICE_PHONE) {
+                p[KEY_R_WEIGHT] = WEIGHT_NORMAL
+                if (from == DEVICE_EINK_LOW) {
+                    p[KEY_R_SIZE] = (size - EINK_SIZE_BOOST).coerceIn(12, 34)
+                    if (p[KEY_R_THEME] == THEME_EINK) p[KEY_R_THEME] = THEME_AUTO
+                    if (p[KEY_R_THEME] == THEME_EINK_NIGHT) p[KEY_R_THEME] = THEME_BLACK
+                }
+            }
+        }
+    }
     suspend fun setReaderVolumeKeys(v: Boolean) = edit { it[KEY_R_VOLKEYS] = v }
     suspend fun setUiScale(v: Float) = edit { if (v in UI_SCALES) it[KEY_UI_SCALE] = v }
     suspend fun setUpdateUrl(v: String) = edit { it[KEY_UPD_URL] = v.trim() }
@@ -609,15 +702,72 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         const val PAGE_VOLUME = "volume"
         const val PAGE_SOFT = "soft"
         const val PAGE_FLAT = "flat"
+        /**
+         * Бумага во весь экран (16.11.2026): лист книжного вида - волокна,
+         * облачность, тень сгиба у корешка, свет из окна, - но без переплёта,
+         * стола и полей вокруг. Красота живёт в полях самой страницы, ширина
+         * строки та же, что у плоского.
+         */
+        const val PAGE_PAPER = "paper"
 
-        val PAGE_STYLES = listOf(PAGE_VOLUME, PAGE_BOOK, PAGE_SOFT, PAGE_FLAT)
+        /** По порядку: от простого к нарядному; первые два - во весь экран. */
+        val PAGE_STYLES = listOf(PAGE_FLAT, PAGE_PAPER, PAGE_VOLUME, PAGE_BOOK, PAGE_SOFT)
 
         fun pageStyleLabel(style: String): String = when (style) {
-            PAGE_VOLUME -> "Книжный"
-            PAGE_BOOK -> "Стопка"
-            PAGE_SOFT -> "Одна карточка"
+            PAGE_VOLUME -> "Книга"
+            PAGE_BOOK -> "Колода"
+            PAGE_SOFT -> "Карточка"
+            PAGE_PAPER -> "Бумага"
             else -> "Плоско"
         }
+
+        /** Чем вид хорош - одной строкой под выбором. */
+        fun pageStyleNote(style: String): String = when (style) {
+            PAGE_VOLUME -> "Настоящий том на столе: переплёт под цвет обложки, корешок, обрез, загиб листа. Нарядно, но поля стола отнимают место."
+            PAGE_BOOK -> "Страница - верхняя карточка колоды с тенью; под ней кромки следующих, колода тает по мере чтения."
+            PAGE_SOFT -> "Одна карточка со светом и тенью на столе, без колоды."
+            PAGE_PAPER -> "Лист из книжного вида во весь экран: волокна бумаги, тень сгиба у корешка, свет из окна. Места - как у плоского."
+            else -> "Ровная заливка во весь экран - больше всего текста, ничего лишнего."
+        }
+
+        // Насыщенность букв: на электронной бумаге и мелким кеглем тонкий
+        // штрих выцветает - раньше «плотнее» включалось только режимом e-ink.
+        const val WEIGHT_NORMAL = "normal"
+        const val WEIGHT_MEDIUM = "medium"
+        const val WEIGHT_BOLD = "bold"
+        val WEIGHTS = listOf(WEIGHT_NORMAL, WEIGHT_MEDIUM, WEIGHT_BOLD)
+
+        fun weightLabel(v: String): String = when (v) {
+            WEIGHT_MEDIUM -> "Плотнее"
+            WEIGHT_BOLD -> "Жирно"
+            else -> "Обычно"
+        }
+
+        // Тап по странице. «Вперёд» - для одной руки: весь экран листает
+        // вперёд, назад - только левый край, панели - верхний край.
+        const val TAPS_EDGES = "edges"
+        const val TAPS_FORWARD = "forward"
+        val TAPS = listOf(TAPS_EDGES, TAPS_FORWARD)
+
+        fun tapsLabel(v: String): String = when (v) {
+            TAPS_FORWARD -> "Вперёд везде"
+            else -> "Края листают"
+        }
+
+        // Поворот экрана в читалке: в постели на боку телефон норовит лечь альбомом.
+        const val ORIENT_AUTO = "auto"
+        const val ORIENT_PORTRAIT = "portrait"
+        const val ORIENT_LANDSCAPE = "landscape"
+        val ORIENTS = listOf(ORIENT_AUTO, ORIENT_PORTRAIT, ORIENT_LANDSCAPE)
+
+        fun orientLabel(v: String): String = when (v) {
+            ORIENT_PORTRAIT -> "Книжно"
+            ORIENT_LANDSCAPE -> "Альбомно"
+            else -> "Как телефон"
+        }
+
+        /** Версия разового набора устройства: выросла - набор применяется ещё раз (см. [migrateDevicePreset]). */
+        const val DEVICE_PRESET_VERSION = 1
 
         // Как уходит страница: смахиванием из колоды, сдвигом (как было) или
         // растворяясь. Поворот вокруг корешка убран вместе с самим корешком.
@@ -771,6 +921,12 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_EINK = booleanPreferencesKey("reader_eink")
         private val KEY_R_DEVICE = stringPreferencesKey("reader_device")
         private val KEY_R_VOLKEYS = booleanPreferencesKey("reader_volume_keys")
+        private val KEY_R_FULLSCREEN = booleanPreferencesKey("reader_fullscreen")
+        private val KEY_R_BRIGHTNESS = floatPreferencesKey("reader_brightness")
+        private val KEY_R_WEIGHT = stringPreferencesKey("reader_weight")
+        private val KEY_R_TAPS = stringPreferencesKey("reader_taps")
+        private val KEY_R_ORIENT = stringPreferencesKey("reader_orientation")
+        private val KEY_DEVICE_PRESET = intPreferencesKey("reader_device_preset")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
@@ -808,39 +964,19 @@ class Settings(private val context: Context, scope: CoroutineScope) {
 }
 
 /**
- * Настройки глазами читалки. На электронной бумаге поверх сохранённых
- * подменяется то, что она показывает плохо. У простой читалки это всё
- * разом: тени, зерно, фаска, блик и стол - серая грязь; объём книги и
- * растворение - лишнее мерцание; прокрутка - шлейф на каждом кадре. Кегль
- * крупнее, бумага - чистый белый (или чистый чёрный, если выбран «белым по
- * чёрному»), неровности печати выключены. У цветной мощной читалки книга
- * остаётся книгой - переплёт, обрез, просвет с оборота, тени, - убираются
- * только анимации (загиб, растворение), зерно (на дизеринге электронной
- * бумаги оно шум) и прокрутка. Выключил режим - всё, что было выбрано, на
- * месте.
+ * Настройки глазами читалки. До 16.11.2026 здесь на электронной бумаге
+ * подменялось почти всё (вид страницы, зерно, тени, кегль, бумага) - и
+ * выбранное в «Виде» на Boox молча не применялось. Теперь это разовый набор
+ * при выборе устройства (Settings.setReaderDevice, Settings.migrateDevicePreset),
+ * а здесь осталось только неизбежное.
  */
-fun Settings.Prefs.readerView(): Settings.Prefs = when (readerDevice) {
-    Settings.DEVICE_EINK_LOW -> copy(
-        readerPaged = true,
-        readerPageStyle = Settings.PAGE_FLAT,
-        readerShadow = Settings.SHADOW_NONE,
-        readerBevel = false,
-        readerSheen = false,
-        readerGrain = false,
-        readerImperfect = false,
-        // Просвет на простой электронной бумаге - серая грязь, загиб - мерцание.
-        readerBleed = false,
-        readerBookTurn = Settings.BOOK_TURN_FADE,
-        readerSize = readerSize + Settings.EINK_SIZE_BOOST,
-        readerTheme = if (readerTheme == Settings.THEME_BLACK) Settings.THEME_EINK_NIGHT else Settings.THEME_EINK,
-    )
-    Settings.DEVICE_EINK_HIGH -> copy(
-        readerPaged = true,
-        readerGrain = false,
-        readerBookTurn = Settings.BOOK_TURN_FADE,
-    )
-    else -> this
-}
+fun Settings.Prefs.readerView(): Settings.Prefs =
+    // С 16.11.2026 подменяется только то, без чего электронная бумага мерцает:
+    // прокрутка (шлейф на каждом кадре) и загиб листа. Всё остальное, что ей
+    // идёт, выставляет разовый набор устройства (Settings.setReaderDevice), а
+    // дальше что выбрано - то и на экране.
+    if (!readerEink) this
+    else copy(readerPaged = true, readerBookTurn = Settings.BOOK_TURN_FADE)
 
 /**
  * Похоже ли устройство на электронную книгу. По производителю и модели: у
