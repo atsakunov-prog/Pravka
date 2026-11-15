@@ -1380,15 +1380,21 @@ private fun Modifier.paperLeaf(tones: PaperTones, look: PageLook, shape: BookSha
             val most = (shape.thickness.value / 4f).toInt().coerceIn(1, 4)
             val share = if (side == PageSide.LEFT) shape.progress else 1f - shape.progress
             val rims = if (share < 0.02f) 0 else ceil(most * share).toInt().coerceIn(1, most)
+            // Чистый белый или чёрный - бумага электронной книги: свет, углы и
+            // сгиб там выходят серой рябью дизеринга (эмулятор, 16.11.2026).
+            // Остаются только кромки блока - они чёткие линии.
+            val pure = tones.paper == Color.White || tones.paper == Color.Black
             onDrawWithContent {
                 fine?.let { drawRect(it, alpha = tones.paperFine) }
                 fibers?.let { drawRect(it, alpha = tones.paperFibers) }
                 clouds?.let { drawRect(it, alpha = tones.paperClouds) }
-                drawRect(fall)
-                drawRect(corners)
+                if (!pure) {
+                    drawRect(fall)
+                    drawRect(corners)
+                }
                 drawContent()
                 if (look.press) fine?.let { drawRect(it, alpha = tones.paperFine * 0.45f) }
-                drawRect(fold, topLeft = foldAt, size = Size(band, h))
+                if (!pure) drawRect(fold, topLeft = foldAt, size = Size(band, h))
                 for (i in 0 until rims) {
                     val x = (1.2f + 2.4f * i) * dp
                     drawRect(

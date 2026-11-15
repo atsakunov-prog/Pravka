@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.displayCutout
@@ -408,9 +409,11 @@ fun RowScope.BarAction(
                     if (badge > 99) "99+" else badge.toString(),
                     color = palette.bg,
                     fontSize = 9.sp,
+                    // Счётчик - у правого верхнего угла значка, а не на нём:
+                    // раньше кружок ложился прямо на значок и закрывал его.
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(start = 14.dp)
+                        .offset(x = 11.dp, y = (-5).dp)
                         .clip(CircleShape)
                         .background(palette.fg.copy(alpha = 0.75f))
                         .padding(horizontal = 4.dp),

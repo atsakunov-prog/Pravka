@@ -670,7 +670,8 @@ fun LibraryScreen(
             book = local,
             onServer = entry.server != null,
             loses = verdictOf(entry)?.need.orEmpty(),
-            onConfirm = { deleteAsk = null; state.deleteFromPhone(local) },
+            // Книги без библиотеки после удаления нет вовсе - карточка с ней закрывается.
+            onConfirm = { deleteAsk = null; if (entry.server == null) menuFor = null; state.deleteFromPhone(local) },
             onClose = { deleteAsk = null },
         )
     }
@@ -1744,11 +1745,11 @@ private fun DeleteDialog(book: Book, onServer: Boolean, loses: Set<String>, onCo
             Text(
                 when {
                     !onServer -> "Этой книги в библиотеке нет: «${book.title}» удалится насовсем, вернуть её будет " +
-                        "неоткуда. Место, вопросы и пометки останутся в приложении."
+                        "неоткуда. Место, вопросы и заметки останутся в приложении."
                     lost != null -> "В библиотеке нет того, что лежит в этой копии: $lost. Удалишь - $lost пропадёт; " +
-                        "подожди, пока телефон сам доложит его на сервер (по Wi-Fi). Место, вопросы и пометки не пропадут."
+                        "подожди, пока телефон сам доложит его на сервер (по Wi-Fi). Место, вопросы и заметки не пропадут."
                     else -> "Копия «${book.title}» удалится с телефона, книга останется на полке - её можно " +
-                        "слушать с сервера или скачать снова. Место, вопросы и пометки не пропадут."
+                        "слушать с сервера или скачать снова. Место, вопросы и заметки не пропадут."
                 }
             )
         },
