@@ -8,9 +8,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 // Вид Правки 5.0 (13.10.2026, docs/redesign-5-plan.md §2): телефон — копия общего
-// вида Ковчега версии 2, того же, что у веба Дел и всех страниц сервера.
-// Тёплый светлый фон и белые панели, тёмная — тёплый графит; один акцент;
-// панели плоские — радиус 10 и линия; без стекла, свечения и градиентов.
+// вида Ковчега, того же, что у веба Дел и всех страниц сервера. С 16.11.2026 —
+// версия 3 «Ночь» (владелец скучал по тёмной Засечке 4.0): тёмная — тёплый почти
+// чёрный фон, янтарный акцент, категории ярко и разными тонами, и она же тема
+// по умолчанию; светлая — версия 2 (тёплый светлый фон, белые панели).
+// Панели плоские — радиус 10 и линия.
 //
 // Почему состояние, а не CompositionLocal. Цвета 4.0 читаются константами
 // `Ink.*` из сотни мест, и половина из них — внутри `drawBehind` и прочих
@@ -23,7 +25,7 @@ import androidx.compose.ui.unit.dp
 /** Какой вид и какая тема сейчас. Ставит `PravkaApp` из настроек, тёмность решает `PravkaTheme`. */
 object Look {
 
-    /** Тема v2: как в системе или выбором (у 4.0 своей светлой нет — она всегда ночь). */
+    /** Тема: ночь (с завода), светлая или как в системе (у 4.0 своей светлой нет — она всегда ночь). */
     enum class Theme(val key: String) {
         SYSTEM("system"),
         LIGHT("light"),
@@ -31,7 +33,7 @@ object Look {
         ;
 
         companion object {
-            fun of(key: String?): Theme = entries.firstOrNull { it.key == key } ?: SYSTEM
+            fun of(key: String?): Theme = entries.firstOrNull { it.key == key } ?: DARK
         }
     }
 
@@ -41,8 +43,8 @@ object Look {
      */
     var v4 by mutableStateOf(false)
 
-    /** Выбор темы из настроек. */
-    var theme by mutableStateOf(Theme.SYSTEM)
+    /** Выбор темы из настроек; нет выбора — ночь, как у страниц Ковчега (кука `kv-look` пустая). */
+    var theme by mutableStateOf(Theme.DARK)
 
     /**
      * Тёмная ли тема v2 прямо сейчас: выбор владельца или, при «как в
@@ -150,21 +152,22 @@ class KvPalette(
             ramp = listOf(Color(0xFF6D84E0), Color(0xFF2747C9), Color(0xFF1C3497), Color(0xFFB8C4F2), Color(0xFFDFE5FA)),
         )
 
+        /** Ночь — версия 3 общего слоя (`kovcheg.css` с 16.11.2026), числа те же. */
         val DARK = KvPalette(
-            bg = Color(0xFF161513), side = Color(0xFF1A1917), panel = Color(0xFF1F1E1B), panel2 = Color(0xFF262521),
-            hover = Color(0xFFFFFAF0).copy(alpha = 0.04f), hover2 = Color(0xFFFFFAF0).copy(alpha = 0.075f),
-            line = Color(0xFF2E2C28), lineSoft = Color(0xFF282622),
-            text = Color(0xFFECEAE5), muted = Color(0xFFB3AFA6), faint = Color(0xFF8F8B82), icon = Color(0xFF9C988F),
-            check = Color(0xFF6E6A62),
-            ok = Color(0xFF7CC59A), warn = Color(0xFFE3A957), bad = Color(0xFFF08A7E), claude = Color(0xFFE08A63),
-            accent = Color(0xFF93ABF8), accentInk = Color(0xFF141414), accentSoft = Color(0xFF252C47),
-            barFill = Color(0xFFB3AFA6),
+            bg = Color(0xFF12110F), side = Color(0xFF161512), panel = Color(0xFF1B1916), panel2 = Color(0xFF221F1B),
+            hover = Color(0xFFFFF0DC).copy(alpha = 0.045f), hover2 = Color(0xFFFFF0DC).copy(alpha = 0.085f),
+            line = Color(0xFF2D2A25), lineSoft = Color(0xFF25221E),
+            text = Color(0xFFF0EADF), muted = Color(0xFFC9B9A2), faint = Color(0xFFA08C74), icon = Color(0xFFB3A28C),
+            check = Color(0xFF7D6D5B),
+            ok = Color(0xFF8FD1A8), warn = Color(0xFFF2B65C), bad = Color(0xFFF08A7E), claude = Color(0xFFE08A63),
+            accent = Color(0xFFFFB347), accentInk = Color(0xFF1D1206), accentSoft = Color(0xFF3A2A16),
+            barFill = Color(0xFFC9B9A2),
             sp = listOf(
-                Color(0xFF93ABF8), Color(0xFFE3A957), Color(0xFF7CC59A), Color(0xFFE58CBC),
-                Color(0xFF67C3D8), Color(0xFFB9A3F5), Color(0xFFEC9C74), Color(0xFFB3AFA6),
+                Color(0xFF8FB0FF), Color(0xFFF2B65C), Color(0xFF7FD6A4), Color(0xFFFF92C2),
+                Color(0xFF63D2E8), Color(0xFFB79CFF), Color(0xFFFF9D66), Color(0xFFB4AD9F),
             ),
-            scrim = Color(0xFF000000).copy(alpha = 0.45f),
-            ramp = listOf(Color(0xFFC3D1FB), Color(0xFF93ABF8), Color(0xFF6F8BE6), Color(0xFF3C4A80), Color(0xFF2A3359)),
+            scrim = Color(0xFF000000).copy(alpha = 0.50f),
+            ramp = ru.zf.pravka.core.Kovcheg.ramp(0xFFFFB347L, dark = true).map { Color(it) },
         )
     }
 }

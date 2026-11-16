@@ -30,7 +30,7 @@ class LookSvodTest {
         assertEquals(Color(0xFF2F7D4F), Kv.ramp[1])
         assertEquals(Color(0xFFF6F4EF), Kv.bg)   // незаписанное — заводское
         Look.dark = true
-        assertEquals(Color(0xFF93ABF8), Kv.accent)
+        assertEquals(Color(0xFFFFB347), Kv.accent)   // заводская ночь — янтарь
         assertEquals(KvPalette.DARK.ramp, Kv.ramp)
     }
 

@@ -360,7 +360,7 @@ object Kovcheg {
     fun ramp(accent: Long, dark: Boolean): List<Long> {
         val black = 0xFF000000L
         val white = 0xFFFFFFFFL
-        val bg = 0xFF161513L
+        val bg = 0xFF12110FL   // фон ночи (версия 3)
         return if (dark) listOf(mix(accent, white, 0.55), accent, mix(accent, black, 0.75), mix(accent, bg, 0.4), mix(accent, bg, 0.25))
         else listOf(mix(accent, white, 0.7), accent, mix(accent, black, 0.75), mix(accent, white, 0.3), mix(accent, white, 0.15))
     }

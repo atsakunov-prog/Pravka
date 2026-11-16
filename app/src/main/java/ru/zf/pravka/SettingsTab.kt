@@ -1002,10 +1002,10 @@ private fun CardsSettings(app: PravkaApp) {
             "телефона. «Вид 4.0» возвращает прежнее стекло, свечение режима и шапки — " +
             "на время переезда; тема у него всегда ночь, а настройки ниже работают только в нём.",
     ) {
-        val theme by settings.lookThemeFlow.collectAsState(initial = "system")
+        val theme by settings.lookThemeFlow.collectAsState(initial = "dark")
         val v4 by settings.lookV4Flow.collectAsState(initial = false)
         ChipRow {
-            for ((key, label) in listOf("system" to "Как в системе", "light" to "Светлая", "dark" to "Тёмная")) {
+            for ((key, label) in listOf("dark" to "Ночь", "light" to "Светлая", "system" to "Как в системе")) {
                 PaperChip(label, selected = theme == key && !v4, enabled = !v4, onClick = { scope.launch { settings.setLookTheme(key) } })
             }
         }

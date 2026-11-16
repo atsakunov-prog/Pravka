@@ -29,10 +29,12 @@ class LookTest {
         assertEquals(Color(0xFF77736A), Ink.TextMeta)
         assertEquals(Color(0xFF2747C9), Modes.Dela.key)
         Look.dark = true
-        assertEquals(Color(0xFF161513), Ink.Bg)
-        assertEquals(Color(0xFFECEAE5), Ink.Text)
-        assertEquals(Color(0xFF93ABF8), Modes.Dela.key)
-        assertEquals(Color(0xFF93ABF8), Kv.accent)
+        // Ночь — версия 3 (16.11.2026): тёплый почти чёрный фон, янтарный акцент.
+        assertEquals(Color(0xFF12110F), Ink.Bg)
+        assertEquals(Color(0xFFF0EADF), Ink.Text)
+        assertEquals(Color(0xFFFFB347), Modes.Dela.key)
+        assertEquals(Color(0xFFFFB347), Kv.accent)
+        assertEquals(Color(0xFFFFB347), Kv.ramp[1])
     }
 
     @Test
@@ -60,10 +62,11 @@ class LookTest {
     }
 
     @Test
-    fun `тема из настроек — по ключу, незнакомое — как в системе`() {
+    fun `тема из настроек — по ключу, без выбора и незнакомое — ночь`() {
         assertEquals(Look.Theme.DARK, Look.Theme.of("dark"))
         assertEquals(Look.Theme.LIGHT, Look.Theme.of("light"))
-        assertEquals(Look.Theme.SYSTEM, Look.Theme.of(null))
-        assertEquals(Look.Theme.SYSTEM, Look.Theme.of("кривое"))
+        assertEquals(Look.Theme.SYSTEM, Look.Theme.of("system"))
+        assertEquals(Look.Theme.DARK, Look.Theme.of(null))
+        assertEquals(Look.Theme.DARK, Look.Theme.of("кривое"))
     }
 }

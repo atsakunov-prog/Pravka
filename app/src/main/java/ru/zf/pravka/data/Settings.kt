@@ -124,7 +124,9 @@ class Settings(private val context: Context) {
         private val KEY_APP_GLOW = floatPreferencesKey("app_glow")
         private val KEY_ICONS_GEMINI = booleanPreferencesKey("icons_gemini")
         // Правка 5.0 (13.10.2026): тема вида v2 и откат на «Вид 4.0».
-        private val KEY_LOOK_THEME = stringPreferencesKey("look_theme")
+        // «look_theme3» с 16.11.2026 (ночь — версия 3): прежний «look_theme» не читается нарочно — в нём мог остаться
+        // давний выбор «как в системе» или «светлая», а владелец просил ночь везде (так же веб: kv-look вместо kv-theme).
+        private val KEY_LOOK_THEME = stringPreferencesKey("look_theme3")
         private val KEY_LOOK_V4 = booleanPreferencesKey("look_v4")
         // 14.10.2026: страницы сервисов Ковчега — внутри приложения; запасной путь — браузером.
         private val KEY_SERVICES_IN_BROWSER = booleanPreferencesKey("services_in_browser")
@@ -850,11 +852,11 @@ class Settings(private val context: Context) {
     }
 
     /**
-     * Тема вида v2 (Правка 5.0, `ui/Look.kt`): «system» — как в телефоне,
-     * «light», «dark». С завода — как в системе: так же решает веб Ковчега,
-     * когда выбора нет.
+     * Тема вида (`ui/Look.kt`): «dark» — ночь, «light», «system» — как в
+     * телефоне. С завода (16.11.2026) — ночь: так же решают страницы Ковчега,
+     * когда выбора нет (кука `kv-look` пустая).
      */
-    val lookThemeFlow = context.dataStore.data.map { it[KEY_LOOK_THEME] ?: "system" }
+    val lookThemeFlow = context.dataStore.data.map { it[KEY_LOOK_THEME] ?: "dark" }
     suspend fun setLookTheme(value: String) {
         context.dataStore.edit { it[KEY_LOOK_THEME] = value }
     }
