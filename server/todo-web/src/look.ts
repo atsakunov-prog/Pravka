@@ -21,7 +21,11 @@ export function lookChoice(): string {
 /** <html data-theme> — всегда, даже у ночи: стили смотрят только на него. */
 export function applyLook(): void {
   const c = lookChoice();
-  document.documentElement.dataset.theme = c === 'system' ? (dark && !dark.matches ? 'light' : 'dark') : c;
+  const t = c === 'system' ? (dark && !dark.matches ? 'light' : 'dark') : c;
+  document.documentElement.dataset.theme = t;
+  // Полоса браузера (Chrome на телефоне) — в цвет страницы: иначе над ночной /t висит светлая шапка (16.11.2026).
+  // Остальной Ковчег делает то же в kovcheg.js; в приложении Правки полоса своя, там это ни на что не влияет.
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', t === 'light' ? '#fcfaf8' : '#12110f');
 }
 
 export function watchLook(): void {
