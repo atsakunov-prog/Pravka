@@ -230,6 +230,34 @@ def _first_only(q: str) -> bool:
     return len(ws) == 1 and looks_first(ws[0])
 
 
+def _first_of(name: Any) -> str:
+    """Первое слово имени без скобки: «Глеб Тестов (Ромашка)» → «глеб»."""
+    ws = words(bare_name(name)[0])
+    return ws[0] if ws else ""
+
+
+def _bare_first_card(w: str, p: dict) -> bool:
+    """Слово w у карточки — не прозвище, а её же голое имя: имя или короткое имя без скобки — одно слово, и это первое
+    слово её имени («Глеб (Бета)» с коротким «Глеб», карточка «Глеб», «Глеб Тестов» с коротким «Глеб»). Прозвище
+    («Ваня» у «Ивана …», «Оля» у «Ольги …») записано именно ей — оно своё и правилом _bare_first не судится."""
+    first = _first_of(p["name"])
+    for x in (p["name"], p["short"]):
+        bw = words(bare_name(x)[0]) if x else []
+        if len(bw) == 1 and (bw[0] == w or same(bw[0], w)) and (bw[0] == first or same(bw[0], first)):
+            return True
+    return False
+
+
+def _namesake(w: str, p: dict) -> bool:
+    """Тёзка: имя карточки (или её короткое имя) начинается с того же имени, что слово w, того же рода."""
+    for f in (_first_of(p["name"]), _first_of(p["short"]) if p["short"] else ""):
+        if f and (f == w or same_first(f, w)):
+            gf, gw = name_gender(f), name_gender(w)
+            if not (gf and gw and gf != gw):
+                return True
+    return False
+
+
 def _label(s: Any) -> tuple[str, ...]:
     """Подпись словами, без скобок и знаков: «Глеб (Ромашка)» и «Глеб(Ромашка)» — одна подпись."""
     return tuple(words(s))
@@ -419,6 +447,8 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
     q_name, hint = split_hint(q or "")
     # Подпись целиком, со скобкой (12.11.2026): «Глеб (Ромашка)» записан карточке именем или другим именем — так его
     # назвал владелец у спикера, и досье дописало это имя карточке. Это совпадение имени, а не догадка по подсказке.
+    qw = words(q_name)
+    bare_q = (translit(qw[0]) if re.search(r"[a-z]", qw[0]) else qw[0]) if len(qw) == 1 else ""  # одно слово запроса
     labels = set()
     if hint:
         labels = {_label(q)} | ({_label(translit(q))} if re.search(r"[a-z]", norm(q)) else set())
@@ -479,6 +509,15 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
         # 12.11.2026 — компанию из скобок лучший подтвердил, а соперник с ней спорит: «Глеб (Ромашка)» при карточке
         # «Глеб» из другой компании (0,8, HINT_CAP) — это не тот Глеб, а не повод сомневаться в том, что из Ромашки.
         sure = all((top[1] == "имя" and t[2]) or (top[4] > 0 and t[4] < 0) for t in rivals)
+        # Голое имя (16.11.2026). У карточки «Имя (Компания)» короткое имя — само «Имя» (так их заводят «Люди сами»,
+        # досье и сверка контактов), у карточки из одного имени — её имя. Запрос «Имя» совпадал с ней точно (1,0), тёзки
+        # с фамилией — 0,35–0,6, и разрыв делал «уверенно»: на живых данных так около двадцати имён уходили к одной
+        # случайной карточке при десятке тёзок (голый спикер встречи, «Глеб» из Zoom). Такое совпадение говорит
+        # только «это имя», а не «этот человек»: при живом тёзке — не уверенно. Подтвердила компания в скобках,
+        # прозвище («Ваня» у «Ивана …»), учётка Дел (команда, семья) — уверенно, как раньше.
+        if sure and bare_q and top[1] == "имя" and top[4] <= 0 and not top[3].get("user_id") \
+                and _bare_first_card(bare_q, top[3]) and any(_namesake(bare_q, t[3]) for t in scored[1:]):
+            sure = False
     return {"best": cands[0] if cands else None, "sure": sure, "candidates": cands, "hint": hint or None}
 
 
