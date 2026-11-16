@@ -175,8 +175,8 @@ def find_person(conn, name: str, exact_only: bool = False) -> dict:
     словами. Шага «подстрока полного имени» больше нет: «Петров» находил «Анну Петрову» частью чужого слова.
     exact_only — для слияния: только точное единственное совпадение или id карточки, who не участвует (отмены у
     слияния нет — склеить не тех хуже, чем переспросить)."""
-    rows = conn.execute(
-        "SELECT id, name, short, aliases FROM crm.people WHERE archived_at IS NULL AND merged_into IS NULL").fetchall()
+    rows = conn.execute("SELECT id, name, short, aliases, user_id FROM crm.people "
+                        "WHERE archived_at IS NULL AND merged_into IS NULL").fetchall()
     try:
         pid = str(uuid.UUID(str(name).strip()))
     except ValueError:
@@ -188,6 +188,14 @@ def find_person(conn, name: str, exact_only: bool = False) -> dict:
     n = store_norm(name)
     own = [r for r in rows if n and n in {store_norm(r["name"]), store_norm(r["short"])}]
     exact = own or [r for r in rows if n and n in set(map(store_norm, r["aliases"] or []))]
+    if len(exact) == 1 and own:
+        # Голое имя (16.11.2026): «Глеб» — короткое имя карточки «Глеб (Бета)», но и начало «Глеба Тестова» — это имя,
+        # а не человек (people.bare_namesakes, то же правило у «кто это»). И для слияния: склеить не тех хуже.
+        sakes = people.bare_namesakes(name, exact[0], rows)
+        if sakes:
+            names = [exact[0]["name"], *(r["name"] for r in sakes)]
+            raise NameError_(f"человек «{name}» не определился: одно имя, а людей с ним несколько — "
+                             f"{', '.join(names[:8])}; назови фамилию или компанию")
     if len(exact) == 1:
         return exact[0]
     if exact:

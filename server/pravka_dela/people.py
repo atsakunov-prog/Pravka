@@ -258,6 +258,21 @@ def _namesake(w: str, p: dict) -> bool:
     return False
 
 
+def bare_namesakes(q: Any, card: dict, rows: list[dict]) -> list[dict]:
+    """Голое имя — не человек (16.11.2026): запрос — одно слово, и у карточки это её же голое имя (_bare_first_card), а
+    не прозвище и не учётка Дел, — тогда живые тёзки того же рода из rows; иначе []. Не пусто — имя называет не этого
+    человека, а любого из них. Одно правило для «кто это» (who), точного имени автоматики (store._names поверх
+    crm.match_name) и коннектора (mcp_tools.find_person)."""
+    ws = words(q)
+    if len(ws) != 1 or card.get("user_id"):
+        return []
+    w = translit(ws[0]) if re.search(r"[a-z]", ws[0]) else ws[0]
+    if not _bare_first_card(w, card):
+        return []
+    return [p for p in rows if str(p["id"]) != str(card["id"]) and not p.get("merged_into")
+            and not p.get("archived_at") and _namesake(w, p)]
+
+
 def _label(s: Any) -> tuple[str, ...]:
     """Подпись словами, без скобок и знаков: «Глеб (Ромашка)» и «Глеб(Ромашка)» — одна подпись."""
     return tuple(words(s))
@@ -447,8 +462,6 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
     q_name, hint = split_hint(q or "")
     # Подпись целиком, со скобкой (12.11.2026): «Глеб (Ромашка)» записан карточке именем или другим именем — так его
     # назвал владелец у спикера, и досье дописало это имя карточке. Это совпадение имени, а не догадка по подсказке.
-    qw = words(q_name)
-    bare_q = (translit(qw[0]) if re.search(r"[a-z]", qw[0]) else qw[0]) if len(qw) == 1 else ""  # одно слово запроса
     labels = set()
     if hint:
         labels = {_label(q)} | ({_label(translit(q))} if re.search(r"[a-z]", norm(q)) else set())
@@ -514,9 +527,8 @@ def who(conn, q: str | None = None, phone: str | None = None, telegram_id: Any =
         # с фамилией — 0,35–0,6, и разрыв делал «уверенно»: на живых данных так около двадцати имён уходили к одной
         # случайной карточке при десятке тёзок (голый спикер встречи, «Глеб» из Zoom). Такое совпадение говорит
         # только «это имя», а не «этот человек»: при живом тёзке — не уверенно. Подтвердила компания в скобках,
-        # прозвище («Ваня» у «Ивана …»), учётка Дел (команда, семья) — уверенно, как раньше.
-        if sure and bare_q and top[1] == "имя" and top[4] <= 0 and not top[3].get("user_id") \
-                and _bare_first_card(bare_q, top[3]) and any(_namesake(bare_q, t[3]) for t in scored[1:]):
+        # прозвище («Ваня» у «Ивана …»), учётка Дел (команда, семья) — уверенно, как раньше. Правило — bare_namesakes.
+        if sure and top[1] == "имя" and top[4] <= 0 and bare_namesakes(q_name, top[3], live):
             sure = False
     return {"best": cands[0] if cands else None, "sure": sure, "candidates": cands, "hint": hint or None}
 

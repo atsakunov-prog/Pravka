@@ -1414,6 +1414,18 @@ WHO_ASK_MIN = 0.6
 WHO_ALL = 1000  # соперников — всех: «8 с именем …» при обрезке limit врало
 
 
+def _bare_name(conn, name: str, pid: Any) -> bool:
+    """crm.match_name нашёл человека точным именем, но это голое имя карточки при живых тёзках (16.11.2026): «Глеб» из
+    встречи или переписки — короткое имя карточки «Глеб (Бета)», и SQL отдаёт её как единственную своим именем, хотя
+    «Глебов» с фамилией десяток. Правило — people.bare_namesakes, то же у «кто это»; тёзки — видимые принимающему (RLS).
+    SQL-функцию не меняем: справочника имён и рода в базе нет."""
+    if len(people.words(name)) != 1:
+        return False
+    rows = people.who_rows(conn)
+    card = next((p for p in rows if str(p["id"]) == str(pid)), None)
+    return bool(card and people.bare_namesakes(name, card, rows))
+
+
 def _person_who(conn, name: str, cache: dict | None = None) -> dict:
     """people.who по имени — один раз на операцию: на сотнях карточек вызов стоит около секунды, а предложение спрашивает
     одно имя в _names, _person_rivals и _who_guard."""
@@ -1971,6 +1983,8 @@ def _names(conn, payload: dict, cache: dict | None = None) -> dict:
         if not name or payload.get(col):
             continue
         r = conn.execute(f"SELECT {col} FROM crm.match_name(%s)", (name,)).fetchone()
+        if r and r[col] and col == "person_id" and _bare_name(conn, name, r[col]):
+            r = None  # голое имя при тёзках — не этот человек; «кто это» ниже тоже не уверен (people.bare_namesakes)
         if r and r[col]:
             table = "crm.projects" if col == "project_id" else "crm.people"
             if conn.execute(f"SELECT 1 FROM {table} WHERE id = %s", (r[col],)).fetchone():
