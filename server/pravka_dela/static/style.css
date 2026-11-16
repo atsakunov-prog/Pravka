@@ -40,8 +40,15 @@
   --tint: var(--accent);
   --claude: var(--accent);
   --now: var(--accent);
-  --kv-glow: radial-gradient(40% 80% at 8% -6%, rgba(255, 214, 160, .26), transparent 70%),
-    radial-gradient(44% 86% at 93% -8%, rgba(111, 163, 204, .32), transparent 70%);
+  /* Вспышки сверху (16.11.2026, вариант В): янтарь слева, синий Дел в середине, розовый справа. */
+  --kv-glow: radial-gradient(28% 66% at 9% -10%, rgba(255, 170, 60, .34), transparent 72%),
+    radial-gradient(27% 64% at 50% -14%, rgba(110, 160, 255, .26), transparent 72%),
+    radial-gradient(28% 66% at 91% -10%, rgba(255, 110, 180, .24), transparent 72%);
+  /* Свечение элементов — в их собственный цвет (currentColor), сила одна — --kv-flash (0% — без вспышек). */
+  --kv-flash: 55%;
+  --kv-fl-text: 0 0 14px color-mix(in srgb, currentColor var(--kv-flash), transparent);
+  --kv-fl-num: 0 0 18px color-mix(in srgb, currentColor calc(var(--kv-flash) * .75), transparent);
+  --kv-fl-icon: drop-shadow(0 0 5px color-mix(in srgb, currentColor var(--kv-flash), transparent));
   color-scheme: dark;
 }
 /* Светлая — версия 2 (13.10.2026). */
@@ -56,6 +63,7 @@
   --shadow: 0 10px 28px rgba(60, 50, 30, .12);
   --font-display: var(--font);
   --kv-glow: none;
+  --kv-fl-text: none; --kv-fl-num: none; --kv-fl-icon: none;   /* днём не светится ничего */
   color-scheme: light;
 }
 
@@ -63,8 +71,9 @@
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 html { -webkit-text-size-adjust: 100%; }
 /* Фон и узор — на <html>, body прозрачный: свой фон у body закрыл бы узор (app.js кладёт его в --kv-pattern). */
+/* Слоёв четыре: три пятна света и узор — размер и повтор на каждый, в том же порядке (иначе пятно возьмёт размер узора). */
 html { background-color: var(--bg); background-image: var(--kv-glow), var(--kv-pattern, none);
-  background-size: 100% 680px, 100% 680px, 960px 960px; background-repeat: no-repeat, no-repeat, repeat; }
+  background-size: 100% 680px, 100% 680px, 100% 680px, 960px 960px; background-repeat: no-repeat, no-repeat, no-repeat, repeat; }
 :root[data-theme=light] { background-size: 960px 960px; background-repeat: repeat; }
 html, body { margin: 0; color: var(--text); height: 100%; }
 /* Размер текста из шестерёнки — масштабом всей страницы (zoom у body). Высоты в vh ниже поделены на него: vh под
@@ -1674,3 +1683,26 @@ button.cap-line:hover { background: var(--hover); }
 
 /* «Показать все» в «Сейчас» (записка отладки 8, 18.10.2026): под пятью строками, слева, как подпись блока. */
 .grp-now .now-more { margin: 6px 0 10px 12px; }
+
+/* ── Вспышки (16.11.2026, владелец о варианте В холста «Ковчег ночью»: «мне нравится очень вспышки!! … ночь, плотно,
+   но везде, где возможно, сделаем вспышки. Красиво очень светятся»). Основа — ночь Б, поверх — свечение всего, что
+   несёт цвет: значок, выбранное, сроки, отметка «сделано», главная кнопка. Обычный текст не светится. Только ночью. ── */
+:root:not([data-theme=light]) .brand img { filter: drop-shadow(0 0 9px rgba(255, 170, 60, .38)); }
+:root:not([data-theme=light]) .kv-head h1 { text-shadow: 0 0 26px rgba(255, 190, 110, .30); }
+:root:not([data-theme=light]) .login-logo { filter: drop-shadow(0 0 16px rgba(255, 170, 60, .45)); }
+:root:not([data-theme=light]) :is(.chip-btn.on, .pill-tab.on, .kv-theme button.on, .kv-svc-items a.on, .kv-svc-top a.on,
+  .h-sub .late, .h-sub .today, .chips .today, .col-task.today .c-t, .col-task .col-due.today, .in-row .in-due.today,
+  .rem-row.due .rem-at, a:hover) {
+  text-shadow: var(--kv-fl-text);
+}
+:root:not([data-theme=light]) :is(.chip-btn.on, .pill-tab.on, .kv-theme button.on, .kv-svc-items a.on, .kv-svc-top a.on) .kv-i { filter: var(--kv-fl-icon); }
+:root:not([data-theme=light]) .pill-tab.on { box-shadow: 0 9px 14px -11px var(--accent); }
+:root:not([data-theme=light]) :is(.btn.main, .btn.ok, .btn.primary):not(:disabled) { box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 42%, transparent); }
+:root:not([data-theme=light]) :is(.btn.main, .btn.ok, .btn.primary):hover:not(:disabled) { box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root:not([data-theme=light]) .tick.done { box-shadow: 0 0 9px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root:not([data-theme=light]) .tick:hover { box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 35%, transparent); }
+:root:not([data-theme=light]) :where(input, textarea, select):focus {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+:root:not([data-theme=light]) :is(.kv-sw.on, .kv-sw.on:hover) { box-shadow: 0 0 0 2px var(--accent), 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root:not([data-theme=light]) .day-chart .bar.today { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 70%, transparent)); }

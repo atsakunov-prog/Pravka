@@ -274,3 +274,27 @@ a.tw-lt:hover { color: var(--accent); text-decoration: none; }
 /* Ночь (16.11.2026): заголовок страницы-двойника — Literata, как «Среда» Правки 4.0; цифры — ровные (lining). */
 :root:not([data-theme=light]) .tw-title h1 { font-family: var(--font-display); font-variant-numeric: lining-nums; font-size: 30px; line-height: 1.1; letter-spacing: 0; color: #fff5e8; }
 @media (max-width: 760px) { :root:not([data-theme=light]) .tw-title h1 { font-size: 26px; } }
+
+/* ── Вспышки (16.11.2026, вариант В): плитки — вспышка своего цвета из угла (Еда, Спорт, Деньги, Шаббат — порядок
+   плиток в day.js), число светится; полоса дня и гора — неоном своих категорий, квадратики «чей это» — искрами. ── */
+.tw-tiles > .tw-tile:nth-child(1) { --tc: #c4e070; } .tw-tiles > .tw-tile:nth-child(2) { --tc: #5fe39a; }
+.tw-tiles > .tw-tile:nth-child(3) { --tc: #b89cff; } .tw-tiles > .tw-tile:nth-child(4) { --tc: #ffc16b; }
+:root:not([data-theme=light]) .tw-tile {
+  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+  background-image: radial-gradient(95% 85% at 0% 0%, color-mix(in srgb, var(--tc, transparent) 14%, transparent), transparent 72%);
+}
+:root:not([data-theme=light]) .tw-th :is(.kv-i, h3) { color: var(--tc, var(--icon)); }
+:root:not([data-theme=light]) .tw-th .kv-i { filter: var(--kv-fl-icon); }
+:root:not([data-theme=light]) .tw-th h3 { text-shadow: 0 0 12px color-mix(in srgb, currentColor 35%, transparent); }
+:root:not([data-theme=light]) .tw-kpi:not(.dim) { text-shadow: 0 0 16px color-mix(in srgb, var(--tc, currentColor) 50%, transparent); }
+:root:not([data-theme=light]) .tw-bar { overflow: visible; }
+:root:not([data-theme=light]) .tw-bar i { background: var(--tc, var(--accent)); box-shadow: 0 0 8px color-mix(in srgb, var(--tc, var(--accent)) 65%, transparent); }
+:root:not([data-theme=light]) .tw-strip { overflow: visible; }
+:root:not([data-theme=light]) .tw-page .c0 { --sc: var(--sp0); } :root:not([data-theme=light]) .tw-page .c1 { --sc: var(--sp1); }
+:root:not([data-theme=light]) .tw-page .c2 { --sc: var(--sp2); } :root:not([data-theme=light]) .tw-page .c3 { --sc: var(--sp3); }
+:root:not([data-theme=light]) .tw-page .c4 { --sc: var(--sp4); } :root:not([data-theme=light]) .tw-page .c5 { --sc: var(--sp5); }
+:root:not([data-theme=light]) .tw-page .c6 { --sc: var(--sp6); } :root:not([data-theme=light]) .tw-page .c7 { --sc: var(--sp7); }
+:root:not([data-theme=light]) .tw-strip i[class*=c] { box-shadow: 0 0 8px color-mix(in srgb, var(--sc, transparent) 75%, transparent), 0 0 18px color-mix(in srgb, var(--sc, transparent) 35%, transparent); }
+:root:not([data-theme=light]) .tw-page .sq[class*=c] { box-shadow: 0 0 7px color-mix(in srgb, var(--sc, transparent) 70%, transparent); }
+:root:not([data-theme=light]) .tw-mtn [class^='s']:not(.sg) { filter: drop-shadow(0 0 4px rgba(255, 220, 180, .35)); }
+:root:not([data-theme=light]) .tw-lr.now .tm { text-shadow: var(--kv-fl-text); }

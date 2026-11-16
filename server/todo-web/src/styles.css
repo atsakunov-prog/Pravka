@@ -76,8 +76,9 @@
     --d-over: #ff7a6b; --d-today: #8fd1a8; --d-tom: #f2b65c; --d-week: #b79cff; --d-weekend: #8fb0ff; --d-none: #8f7d68;
     --tok-fg: #ffc261;
     --sp0: #8fb0ff; --sp1: #f2b65c; --sp2: #7fd6a4; --sp3: #ff92c2; --sp4: #63d2e8; --sp5: #b79cff; --sp6: #ff9d66; --sp7: #b4ad9f;
-    --glow: radial-gradient(48% 90% at 10% -10%, rgba(255, 214, 160, .20), transparent 70%),
-      radial-gradient(48% 90% at 92% -12%, rgba(111, 163, 204, .26), transparent 70%);
+    --glow: radial-gradient(30% 66% at 9% -10%, rgba(255, 170, 60, .30), transparent 72%),
+      radial-gradient(28% 64% at 50% -14%, rgba(110, 160, 255, .26), transparent 72%),
+      radial-gradient(30% 66% at 91% -10%, rgba(255, 110, 180, .22), transparent 72%);
     --sh1: 0 4px 10px rgba(0, 0, 0, .35), 0 8px 18px 4px rgba(0, 0, 0, .25);
     --sh2: 0 8px 32px 2px rgba(0, 0, 0, .5), 0 4px 7px 6px rgba(0, 0, 0, .3);
     color-scheme: dark;
@@ -93,8 +94,9 @@
   --d-over: #ff7a6b; --d-today: #8fd1a8; --d-tom: #f2b65c; --d-week: #b79cff; --d-weekend: #8fb0ff; --d-none: #8f7d68;
   --tok-fg: #ffc261;
   --sp0: #8fb0ff; --sp1: #f2b65c; --sp2: #7fd6a4; --sp3: #ff92c2; --sp4: #63d2e8; --sp5: #b79cff; --sp6: #ff9d66; --sp7: #b4ad9f;
-  --glow: radial-gradient(48% 90% at 10% -10%, rgba(255, 214, 160, .20), transparent 70%),
-    radial-gradient(48% 90% at 92% -12%, rgba(111, 163, 204, .26), transparent 70%);
+  --glow: radial-gradient(30% 66% at 9% -10%, rgba(255, 170, 60, .30), transparent 72%),
+    radial-gradient(28% 64% at 50% -14%, rgba(110, 160, 255, .26), transparent 72%),
+    radial-gradient(30% 66% at 91% -10%, rgba(255, 110, 180, .22), transparent 72%);
   --sh1: 0 4px 10px rgba(0, 0, 0, .35), 0 8px 18px 4px rgba(0, 0, 0, .25);
   --sh2: 0 8px 32px 2px rgba(0, 0, 0, .5), 0 4px 7px 6px rgba(0, 0, 0, .3);
   color-scheme: dark;
@@ -707,3 +709,49 @@ svg { flex: none; }
   .ds-s { font-size: 11px; }
   .ds-l { font-size: 11.5px; }
 }
+
+/* ── Вспышки (16.11.2026, владелец о варианте В холста: «мне нравится очень вспышки!! … ночь, плотно, но везде, где
+   возможно, сделаем вспышки. Красиво очень светятся»). Основа — ночь Б, поверх — свечение всего, что несёт цвет:
+   приоритеты, сроки, выбранное, главная кнопка, плашки и линия дня. Свет — в цвет самого элемента (currentColor),
+   сила — --fl. Обычный текст не светится. Только ночью (main.tsx ставит data-theme всегда). ── */
+:root[data-theme="dark"] {
+  --fl: 55%;
+  --fl-text: 0 0 14px color-mix(in srgb, currentColor var(--fl), transparent);
+  --fl-icon: drop-shadow(0 0 5px color-mix(in srgb, currentColor var(--fl), transparent));
+}
+/* Строки задач прозрачные — свет сверху проходит сквозь список (выбранная и в фокусе — со своим фоном). */
+:root[data-theme="dark"] .task:not(.focus, .sel) { background: transparent; }
+:root[data-theme="dark"] .view-h .vt { text-shadow: 0 0 26px rgba(255, 190, 110, .30); }
+:root[data-theme="dark"] .cb.p1 i { box-shadow: 0 0 9px color-mix(in srgb, var(--p1) 55%, transparent); }
+:root[data-theme="dark"] .cb.p2 i { box-shadow: 0 0 9px color-mix(in srgb, var(--p2) 55%, transparent); }
+:root[data-theme="dark"] .cb.p3 i { box-shadow: 0 0 9px color-mix(in srgb, var(--p3) 55%, transparent); }
+:root[data-theme="dark"] :is(.d-over, .d-today, .d-tom, .d-week, .nav-item.on, .sect-h .act, .pstat-level, .tok, .lbl-chip) { text-shadow: var(--fl-text); }
+:root[data-theme="dark"] :is(.nav-item.on .ic, .hash, .nav-item .ic svg[style]) { filter: var(--fl-icon); }
+:root[data-theme="dark"] .btn.pri:not(:disabled) { box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 42%, transparent); }
+:root[data-theme="dark"] .btn.pri:hover:not(:disabled) { box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root[data-theme="dark"] .fab { box-shadow: 0 0 22px color-mix(in srgb, var(--accent) 55%, transparent), 0 4px 12px rgba(0, 0, 0, .35); }
+/* Плашки над «Сейчас» и «Сегодня»: у каждой вспышка своего цвета из угла, подпись и число светятся. */
+:root[data-theme="dark"] .ds-dela { --dc: #7fb2ff; } :root[data-theme="dark"] .ds-sport { --dc: #5fe39a; }
+:root[data-theme="dark"] .ds-eda { --dc: #c4e070; } :root[data-theme="dark"] .ds-dengi { --dc: #b89cff; }
+:root[data-theme="dark"] .ds-tile {
+  background-color: color-mix(in srgb, var(--raised) 88%, transparent);
+  background-image: radial-gradient(95% 85% at 0% 0%, color-mix(in srgb, var(--dc, transparent) 15%, transparent), transparent 72%);
+}
+:root[data-theme="dark"] .ds-tile .ds-l { color: var(--dc); text-shadow: var(--fl-text); }
+:root[data-theme="dark"] .ds-tile .ds-l svg { filter: var(--fl-icon); }
+:root[data-theme="dark"] .ds-tile .ds-v { text-shadow: 0 0 16px color-mix(in srgb, var(--dc, currentColor) 55%, transparent); }
+:root[data-theme="dark"] .ds-bar { overflow: visible; }
+:root[data-theme="dark"] .ds-bar > i { color: var(--dc); opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, currentColor 65%, transparent); }
+:root[data-theme="dark"] .ds-day { background-color: color-mix(in srgb, var(--raised) 88%, transparent); }
+:root[data-theme="dark"] .ds-dh em.up { text-shadow: 0 0 14px rgba(255, 176, 60, .6); }
+:root[data-theme="dark"] .ds-dh em.down { text-shadow: 0 0 12px rgba(224, 121, 74, .45); }
+/* Линия суток — неоном, как лента Засечки: цветные отрезки светятся своим цветом, «сейчас» — белой искрой. */
+:root[data-theme="dark"] .ds-rib { overflow: visible; }
+:root[data-theme="dark"] .ds-seg.c0 { --sc: var(--sp0); } :root[data-theme="dark"] .ds-seg.c1 { --sc: var(--sp1); }
+:root[data-theme="dark"] .ds-seg.c2 { --sc: var(--sp2); } :root[data-theme="dark"] .ds-seg.c3 { --sc: var(--sp3); }
+:root[data-theme="dark"] .ds-seg.c4 { --sc: var(--sp4); } :root[data-theme="dark"] .ds-seg.c5 { --sc: var(--sp5); }
+:root[data-theme="dark"] .ds-seg.c6 { --sc: var(--sp6); } :root[data-theme="dark"] .ds-seg.c7 { --sc: var(--sp7); }
+:root[data-theme="dark"] .ds-seg[class*=" c"] {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--sc) 75%, transparent), 0 0 18px color-mix(in srgb, var(--sc) 35%, transparent);
+}
+:root[data-theme="dark"] .ds-now { background: #fff; box-shadow: 0 0 8px #fff, 0 0 16px rgba(255, 241, 220, .7); top: -3px; bottom: -3px; }
