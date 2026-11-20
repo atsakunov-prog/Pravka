@@ -54,6 +54,9 @@ class PcAsrStream(
     /** Комп хоть раз принял кусок: дорога есть (строка, что отстала, — это «застряла», а не «нет дома»). */
     val reachedHome: Boolean get() = synchronized(lock) { reached && broken?.outcome != Outcome.UNAVAILABLE }
 
+    /** Отправка ещё жива: не бросила тейк. false — строки компа больше не будет, показывать Google. */
+    val alive: Boolean get() = synchronized(lock) { broken == null }
+
     private val base = archiveUrl.trimEnd('/') + "/"
     private val client = http.newBuilder()
         .connectTimeout(5, TimeUnit.SECONDS)

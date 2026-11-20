@@ -35,11 +35,16 @@ class LineMux(val pcMode: Boolean) {
     var fallbacks = 0
         private set
 
-    /** Новая строка Google; ответ — что показать (null — не трогать пилюлю). */
-    fun onGoogle(text: String, now: Long): String? {
+    /**
+     * Новая строка Google; ответ — что показать (null — не трогать пилюлю). [pcAlive] = false —
+     * отправка звука домой уже бросила тейк (нет связи, служба лежит): ждать строку компа незачем,
+     * сразу Google (20.11.2026, без сети строка ждала лишние 2 с поверх медленного Google).
+     */
+    fun onGoogle(text: String, now: Long, pcAlive: Boolean = true): String? {
         google = text
         if (text.isNotBlank() && googleFirstAt < 0L) googleFirstAt = now
         if (!pcMode) return show(Source.GOOGLE, text, now)
+        if (!pcAlive) return if (text.isBlank()) null else show(Source.GOOGLE, text, now)
         if (pcFresh(now)) return null
         if (text.isBlank()) return null
         // Комп ещё ни разу не ответил: ждём его немного после первого слова Google.

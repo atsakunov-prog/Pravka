@@ -1097,7 +1097,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // Чья строка в пилюле — решает LineMux: с выбором «Google» это всегда строка Google.
                 val now = SystemClock.elapsedRealtime()
                 take.timing.google(now, live)
-                take.mux.onGoogle(live, now)?.let { showLine(take, it) }
+                take.mux.onGoogle(live, now, pcAlive = take.stream?.alive != false)?.let { showLine(take, it) }
                 saveDraftThrottled(live)
             },
             // Finalized chunk: persist immediately (LiveDraft skips it if the
@@ -1128,7 +1128,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Строка открывается пустой, и эта пустота врёт: слышать движок
         // начинает позже. Пишем в неё, чего ждём, — если он уже успел
         // отозваться, там к этому мигу стоит «говори».
-        if (!speechReady) floatingButton?.hintTicker(waitHint() + lineTag(take))
+        // Подсказка — всегда здесь, а не только «ещё не готов»: на пути, который звук Правки уже
+        // брал, «говори» звучит с тапа (`GoogleSpeechSession.fireReady` внутри start), и «слушаю»
+        // приходило, пока пилюли ещё не было, — терялось (20.11.2026, Саша: «не пишет мне „слушаю
+        // Гига“, просто открывает… не показывает, кто именно слушает»).
+        floatingButton?.hintTicker((if (speechReady) listenHint() else waitHint()) + lineTag(take))
         floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it

@@ -61,4 +61,17 @@ class LineMuxTest {
         mostly.close(7_000)
         assertTrue(mostly.stuck())
     }
+
+    @Test
+    fun `дорога домой оборвалась — Google сразу, без двух секунд ожидания`() {
+        val m = LineMux(pcMode = true)
+        // первое слово Google, а отправка уже бросила тейк (нет связи)
+        assertEquals("иван", m.onGoogle("иван", 4_400, pcAlive = false))
+        assertEquals(LineMux.Source.GOOGLE, m.source)
+        // и строка компа, которая успела прийти раньше обрыва, Google не перебивает
+        val n = LineMux(pcMode = true)
+        n.onGoogle("иван", 0)
+        n.onPc("иван", 1_000)
+        assertEquals("иван привет", n.onGoogle("иван привет", 1_500, pcAlive = false))
+    }
 }
