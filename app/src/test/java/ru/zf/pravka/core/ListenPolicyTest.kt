@@ -254,4 +254,51 @@ class ListenPolicyTest {
         assertFalse(ListenPolicy.cloudStillDead(dead, dead + ListenPolicy.CLOUD_DEAD_TTL_MS, sameNetwork = true))
         assertFalse(ListenPolicy.cloudStillDead(0L, dead, sameNetwork = true))
     }
+
+    // ---- 20.11.2026: «переключается на оффлайн, когда я просто молчу» ----
+
+    @Test
+    fun `до первого слова сессии облако ждём дольше`() {
+        // 20.11: тейк ушёл в пакет на четвёртой секунде — облако ещё не успело ответить.
+        assertFalse(ListenPolicy.cloudMute(voicedMs = 3_700, sinceWordsMs = 4_000, heardWords = false))
+        assertTrue(ListenPolicy.cloudMute(voicedMs = 3_700, sinceWordsMs = 4_000, heardWords = true))
+        assertTrue(ListenPolicy.cloudMute(voicedMs = 6_000, sinceWordsMs = 7_000, heardWords = false))
+        // У 97 % здоровых тейков первое слово — до 5,4 с речи.
+        assertTrue(ListenPolicy.CLOUD_MUTE_FIRST_MS >= 5_500L)
+    }
+
+    @Test
+    fun `молчит облако - решает дорога, а не громкость`() {
+        // Дороги нет — пакет, как раньше.
+        assertEquals(ListenPolicy.MuteStep.OFFLINE, ListenPolicy.afterMuteProbe(roadOpen = false, spanReplayed = false))
+        assertEquals(ListenPolicy.MuteStep.OFFLINE, ListenPolicy.afterMuteProbe(roadOpen = false, spanReplayed = true))
+        // Дорога есть — облако заново с повтором звука.
+        assertEquals(ListenPolicy.MuteStep.RELISTEN, ListenPolicy.afterMuteProbe(roadOpen = true, spanReplayed = false))
+        // Уже повторяли — значит, это шум, пока владелец молчит: не трогать.
+        assertEquals(ListenPolicy.MuteStep.KEEP, ListenPolicy.afterMuteProbe(roadOpen = true, spanReplayed = true))
+        // И проверять дорогу снова — не каждые три секунды гула машины.
+        assertFalse(ListenPolicy.cloudMute(voicedMs = 4_000, sinceWordsMs = 30_000, settled = true))
+        assertTrue(ListenPolicy.cloudMute(voicedMs = 15_000, sinceWordsMs = 30_000, settled = true))
+    }
+
+    @Test
+    fun `облако запирается на пять минут только по уликам мёртвой дороги`() {
+        assertTrue(ListenPolicy.deadRoad(cloudError = true, stalled = false, silent = false))
+        assertTrue(ListenPolicy.deadRoad(cloudError = false, stalled = true, silent = false))
+        assertTrue(ListenPolicy.deadRoad(cloudError = false, stalled = false, silent = true))
+        // Застрял дважды подряд — беда сессии, следующий тейк снова облаком.
+        assertFalse(ListenPolicy.deadRoad(cloudError = false, stalled = false, silent = false))
+    }
+
+    @Test
+    fun `пустой кусок посреди речи повторяется один раз`() {
+        // «Середина из предложения убирается»: две секунды речи — ни знака.
+        assertTrue(ListenPolicy.replayBlank(gained = 0, speechMs = 2_000, spanReplayed = false))
+        // Этот промежуток уже повторяли — кашель или телевизор, петли нет.
+        assertFalse(ListenPolicy.replayBlank(gained = 0, speechMs = 2_000, spanReplayed = true))
+        // Слова пришли — повторять нечего.
+        assertFalse(ListenPolicy.replayBlank(gained = 12, speechMs = 2_000, spanReplayed = false))
+        // Короткий звук — не речь.
+        assertFalse(ListenPolicy.replayBlank(gained = 0, speechMs = 800, spanReplayed = false))
+    }
 }
