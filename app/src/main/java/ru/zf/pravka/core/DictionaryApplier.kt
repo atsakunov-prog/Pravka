@@ -43,12 +43,22 @@ class DictionaryApplier(private val store: DictionaryStore) {
         }
         fired += hints.map { it.id }
         fired += protects.map { it.id }
+        val names = peopleNames()
+
+        // Ослышка словаря в другой форме (20.11.2026, владелец: «у меня ебеда
+        // просчиталась как ебеда»). Жёсткая замена ловит только записанную
+        // форму: в словаре «ебеде» → EBITDA, а GigaAM на компе услышал «ебедой»
+        // и «ебеда» — замена промахнулась, подсказки модели не было, в текст
+        // ушла «Ебедой». Заменять по основе нельзя (та же беда, что «осу» →
+        // «осуди»), подсказать — можно: модель решает по смыслу. Строки в
+        // запросе — только на найденные формы, не на весь словарь.
+        val loose = looseHints(entries, text, names)
 
         // Люди из Дел (06.10.2026, docs/svod-phone.md, 3.7): имена, короткие и
         // другие имена — PROTECT на лету, только встреченные в тексте. В словарь
         // (`dict.main`) их не кладём: карточки живут в Делах и меняются там.
         val known = protects.map { it.from.lowercase() }.toHashSet()
-        val people = peopleNames().asSequence()
+        val people = names.asSequence()
             .map { it.trim() }
             .filter { it.length >= 3 && known.add(it.lowercase()) }
             .filter { boundaryRegex(it, withRussianEndings = true)?.containsMatchIn(text) == true }
@@ -56,7 +66,7 @@ class DictionaryApplier(private val store: DictionaryStore) {
             .map { DictEntry(from = it, mode = DictMode.PROTECT, note = "человек из Дел", createdAt = 0L) }
             .toList()
 
-        return Prepared(text, buildDictBlock(hints, protects + people), fired)
+        return Prepared(text, buildDictBlock(hints + loose, protects + people), fired)
     }
 
     private fun buildDictBlock(hints: List<DictEntry>, protects: List<DictEntry>): String {
@@ -95,6 +105,70 @@ class DictionaryApplier(private val store: DictionaryStore) {
 
         /** Потолок имён в одном запросе: длинная встреча не должна раздувать промпт. */
         private const val MAX_PEOPLE = 20
+
+        /** Потолок строк «ослышка в другой форме» в одном запросе. */
+        private const val MAX_LOOSE = 10
+
+        private val VOWEL_TAIL = Regex("[аеёиоуыэюяйьАЕЁИОУЫЭЮЯЙЬ]+$")
+        private val NOT_WORD = Regex("[^\\p{L}\\p{N}]+")
+
+        /** Основа слова: без конечных гласных, «й» и «ь» — «ебеде» → «ебед». */
+        internal fun stem(word: String): String = word.trim().replace(VOWEL_TAIL, "")
+
+        /**
+         * Ослышки жёстких замен в другой форме — подсказками модели, не заменой.
+         * Берутся однословные кириллические ослышки с основой от четырёх букв
+         * («осу» не пройдёт), ищутся как основа плюс до трёх букв окончания
+         * в тексте ПОСЛЕ жёстких замен (точная форма уже заменена). Не
+         * подсказываем, если найденное слово — само верное слово в другом
+         * падеже («Марианной» при «мариану» → «Марианну»), слово, которое
+         * словарь считает верным, или имя человека из Дел: без этих трёх
+         * отсечек прогон по 207 тейкам 6–20.11 давал лишние строки на каждое
+         * «Марианной»; с ними — 3 тейка: обе «ебеды» и «Мариан/марианом» с
+         * одной «н». Одно найденное
+         * слово — одна строка: из записей берётся та, чья ослышка ближе к нему.
+         */
+        internal fun looseHints(entries: List<DictEntry>, text: String, people: List<String>): List<DictEntry> {
+            val good = HashSet<String>()
+            for (e in entries) {
+                if (!e.enabled) continue
+                val w = if (e.mode == DictMode.PROTECT) e.from else e.to
+                w.lowercase().split(NOT_WORD).filterTo(good) { it.length >= 3 }
+            }
+            people.forEach { n -> n.lowercase().split(NOT_WORD).filterTo(good) { it.length >= 3 } }
+            val goodStems = good.map { stem(it) }.filter { it.length >= 5 }.toHashSet()
+
+            class Pick(val entry: DictEntry, val form: String, val near: Int)
+            val picks = LinkedHashMap<String, Pick>()
+            for (e in entries) {
+                if (!e.enabled || e.mode != DictMode.HARD || e.to.isBlank()) continue
+                val from = e.from.trim()
+                if (from.any { it.isWhitespace() } || from.none { it.isCyrillic() }) continue
+                val base = stem(from)
+                if (base.length < 4) continue
+                val toBase = stem(e.to.lowercase())
+                val rx = runCatching {
+                    Regex("(?iu)(?<![\\p{L}\\p{N}])" + Regex.escape(base) + "[а-яё]{0,3}(?![\\p{L}\\p{N}])")
+                }.getOrNull() ?: continue
+                for (m in rx.findAll(text)) {
+                    val w = m.value.lowercase()
+                    if (toBase.length >= 4 && w.startsWith(toBase)) continue
+                    if (w in good || goodStems.any { w.startsWith(it) }) continue
+                    val near = w.zip(from.lowercase()).takeWhile { (a, b) -> a == b }.size
+                    val old = picks[w]
+                    if (old == null || near > old.near) picks[w] = Pick(e, m.value, near)
+                }
+            }
+            return picks.values.take(MAX_LOOSE).map {
+                DictEntry(
+                    from = it.form,
+                    to = it.entry.to,
+                    mode = DictMode.HINT,
+                    note = "ослышка словаря «${it.entry.from.trim()}» в другой форме",
+                    createdAt = 0L,
+                )
+            }
+        }
 
         // Word boundaries via lookarounds - \b is unreliable for Cyrillic.
         // Endings tolerance is used for DETECTION only, never for HARD
