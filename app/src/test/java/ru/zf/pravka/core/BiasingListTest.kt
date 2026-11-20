@@ -6,7 +6,7 @@ import org.junit.Test
 
 // Подсказки распознавателю из словаря: слова владельца впереди семени,
 // защищённые впереди правых частей, латиница наравне, дубли без регистра,
-// потолок сорок (docs/agreements.md, «Подсказки распознавателю»).
+// потолок 300 (docs/agreements.md, «Подсказки распознавателю», «Потолок подсказок»).
 class BiasingListTest {
 
     private fun seed(n: Int, hits: Int = 5) = (1..n).map {
@@ -19,14 +19,14 @@ class BiasingListTest {
     private val isSeed: (DictEntry) -> Boolean = { it.id < 1000 }
 
     @Test
-    fun `слова владельца попадают в сорок даже с нулём срабатываний`() {
-        val entries = seed(60) + listOf(
+    fun `слова владельца попадают под потолок даже с нулём срабатываний`() {
+        val entries = seed(BiasingList.LIMIT + 20) + listOf(
             owner("стаф джет", "Стаффджет"),
             owner("тейсти кофе", "Tasty Coffee"),
             owner("Шепелина", "", mode = DictMode.PROTECT),
         )
         val built = BiasingList.build(entries, isSeed)
-        assertEquals(40, built.strings.size)
+        assertEquals(BiasingList.LIMIT, built.strings.size)
         assertTrue(built.strings.contains("Стаффджет"))
         assertTrue(built.strings.contains("Шепелина"))
         // Латиница владельца — тоже впереди семени, наравне с кириллицей.
@@ -74,5 +74,11 @@ class BiasingListTest {
         assertEquals(listOf("Бета", "Альфа", "термин1", "термин2"), built.strings)
         assertEquals(2, built.ownerCount)
         assertEquals("4 строк, владельца 2, латиницей 0", built.describe())
+    }
+
+    @Test
+    fun `потолок 300 и сотня сверху для слов режима`() {
+        assertEquals(300, BiasingList.LIMIT)
+        assertEquals(400, BiasingList.INTENT_MAX)
     }
 }

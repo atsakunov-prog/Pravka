@@ -631,7 +631,7 @@ class GoogleSpeechSession(
                     if (biasing.isNotEmpty()) {
                         putStringArrayListExtra(
                             RecognizerIntent.EXTRA_BIASING_STRINGS,
-                            ArrayList(biasing.take(100)),
+                            ArrayList(biasing.take(ru.zf.pravka.core.BiasingList.INTENT_MAX)),
                         )
                     }
                 }
