@@ -287,6 +287,28 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedFinalPc: Boolean = true
     /** Застревания компа подряд — два переключают итог на Google. Живёт, пока жива служба. */
     private val pcBreaker = ru.zf.pravka.core.PcAsr.Breaker()
+    /** Строка в пилюле «П» — с компа (`core/LineMux.kt`, 20.11.2026): Settings.speechLiveFlow. */
+    @Volatile internal var cachedLivePc: Boolean = true
+    /** Строка компа застревала тейк за тейком — два подряд переключают строку на Google. */
+    private val liveBreaker = ru.zf.pravka.core.PcAsr.Breaker()
+
+    /**
+     * Тейк «П» и комп (20.11.2026): отправка звука ([stream], null — компа в тейке нет), выбор итога и
+     * строки на старте тейка, замер ([timing] — у каждого тейка, и у чисто гугловского: с чем сравнивать)
+     * и чья строка в пилюле ([mux]).
+     */
+    private class PcTake(
+        val stream: ru.zf.pravka.data.PcAsrStream?,
+        val finalPc: Boolean,
+        val livePc: Boolean,
+        val timing: ru.zf.pravka.core.TakeTiming,
+        val mux: ru.zf.pravka.core.LineMux,
+    ) {
+        val line: String get() = if (livePc) ru.zf.pravka.core.PcAsr.FINAL_PC else ru.zf.pravka.core.PcAsr.FINAL_GOOGLE
+    }
+
+    /** Идущий тейк «П» — его замер и строка; null — тейка нет. */
+    private var pcTake: PcTake? = null
     /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
     @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
     /** Где всплывает пилюля диктовки: сверху, снизу или у кнопки — Settings.tickerPlaceFlow. */
@@ -402,6 +424,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             app.settings.speechFinalFlow.collect { cachedFinalPc = it == ru.zf.pravka.core.PcAsr.FINAL_PC }
+        }
+        scope.launch {
+            app.settings.speechLiveFlow.collect { cachedLivePc = it == ru.zf.pravka.core.PcAsr.FINAL_PC }
         }
         scope.launch {
             app.settings.speechNetworkFlow.collect {
@@ -1020,8 +1045,29 @@ class PravkaAccessibilityService : AccessibilityService() {
         // (`data/TakeAudio.kt`); старое сверх 300 МБ уходит на потоке диска.
         ru.zf.pravka.data.DiskWriter.post { runCatching { app.takeAudio.prune() } }
         val tape = app.takeAudio.newFile()
-        // Итог с компа (`core/PcAsr.kt`): тот же звук своей записи — ещё и домой, по ходу тейка.
-        val pc = if (cachedFinalPc) newPcStream(tape) else null
+        // Итог и строка с компа (`core/PcAsr.kt`, `core/LineMux.kt`): тот же звук своей записи — ещё и
+        // домой, по ходу тейка. Выбор фиксируем на старте, как путь Google.
+        val finalPc = cachedFinalPc
+        val livePc = cachedLivePc
+        val pc = if (finalPc || livePc) newPcStream(tape) else null
+        val take = PcTake(
+            stream = pc,
+            finalPc = finalPc,
+            livePc = livePc,
+            timing = ru.zf.pravka.core.TakeTiming(googleStartedAt),
+            mux = ru.zf.pravka.core.LineMux(pcMode = livePc && pc != null),
+        )
+        pcTake = take
+        pc?.timing = take.timing
+        pc?.onLive = { live, arrivedAt, audioAt ->
+            // Поток отправки → главный: пилюлю трогает только он, и только пока это тот же тейк.
+            scope.launch {
+                if (pcTake === take) {
+                    take.timing.pc(arrivedAt, ru.zf.pravka.core.PcAsr.words(live.text), audioAt, live.passMs)
+                    take.mux.onPc(live.text, arrivedAt)?.let { floatingButton?.updateTicker(it) }
+                }
+            }
+        }
         val session = GoogleSpeechSession(
             this,
             biasing = if (cachedBiasingOn) cachedBiasing else emptyList(),
@@ -1048,7 +1094,10 @@ class PravkaAccessibilityService : AccessibilityService() {
             // Live text feeds the on-screen ticker; a throttled copy goes to disk
             // so an interrupted take (phone dies, killed) can still be recovered.
             onPartial = { live ->
-                floatingButton?.updateTicker(live)
+                // Чья строка в пилюле — решает LineMux: с выбором «Google» это всегда строка Google.
+                val now = SystemClock.elapsedRealtime()
+                take.timing.google(now, live)
+                take.mux.onGoogle(live, now)?.let { floatingButton?.updateTicker(it) }
                 saveDraftThrottled(live)
             },
             // Finalized chunk: persist immediately (LiveDraft skips it if the
@@ -1058,7 +1107,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.liveDraft.save(text)
             },
             onDone = { text ->
-                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health, session.audioFile, pc)
+                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health, session.audioFile, take)
             },
             onError = { msg ->
                 pc?.cancel()
@@ -1242,6 +1291,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         floatingButton?.setRecording(false)
         floatingButton?.setBusy(true)
         app.eventLog.add("stop requested")
+        pcTake?.timing?.stop(SystemClock.elapsedRealtime())
         session.stop()  // -> onLiveDone
     }
 
@@ -1256,9 +1306,9 @@ class PravkaAccessibilityService : AccessibilityService() {
             return null
         }
         val id = ru.zf.pravka.core.PcAsr.takeId(tape.name) ?: return null
-        return ru.zf.pravka.data.PcAsrStream(app.httpClient, link.url, link.token, id) { line ->
+        return ru.zf.pravka.data.PcAsrStream(app.httpClient, link.url, link.token, id, log = { line ->
             app.eventLog.add("итог с компа: $line")
-        }
+        })
     }
 
     /**
@@ -1268,6 +1318,7 @@ class PravkaAccessibilityService : AccessibilityService() {
      * застревать, то тогда перещёлкивает на гугл»).
      */
     private fun finishWithPc(
+        take: PcTake,
         pc: ru.zf.pravka.data.PcAsrStream,
         engine: String,
         google: String,
@@ -1282,18 +1333,51 @@ class PravkaAccessibilityService : AccessibilityService() {
             var pick: ru.zf.pravka.core.PcAsr.Pick? = null
             try {
                 val r = pc.await()
+                val now = SystemClock.elapsedRealtime()
+                val waited = now - waitFrom
+                if (r.outcome == ru.zf.pravka.core.PcAsr.Outcome.OK) take.timing.pcFinal(now, waited, r.serverMs)
+                else take.timing.waited(waited)
                 val p = ru.zf.pravka.core.PcAsr.choose(engine, google, r)
                 pick = p
-                val waited = SystemClock.elapsedRealtime() - waitFrom
                 app.eventLog.add("итог тейка: ${if (p.engine == ru.zf.pravka.core.PcAsr.ENGINE) "комп" else "Google"} " +
                     "(${r.outcome.name.lowercase()}, ждали $waited мс) — ${p.note}")
                 if (pcBreaker.note(r.outcome)) flipToGoogle(r.note)
             } finally {
                 // Служба закрылась посреди ожидания — тейк всё равно в журнал, а черновик цел.
                 val p = pick ?: ru.zf.pravka.core.PcAsr.Pick(engine, google, null, "служба закрылась, пока ждали комп")
-                deliverLive(p.engine, p.text, health, audio, wall, target, p.googleAlt, p.note)
+                deliverLive(p.engine, p.text, health, audio, wall, target, p.googleAlt, p.note, timingOf(take, p.engine))
             }
         }
+    }
+
+    /** Замер тейка для «Расшифровок» и архива: чья строка была выбрана, чей текст вставлен. */
+    private fun timingOf(take: PcTake, insertedEngine: String): org.json.JSONObject? = runCatching {
+        val inserted = if (insertedEngine == ru.zf.pravka.core.PcAsr.ENGINE) "pc" else "google"
+        take.timing.summary(take.line, inserted, take.mux)
+    }.getOrNull()
+
+    /**
+     * Строка компа в этом тейке: застряла — счёт сторожу; два тейка подряд — строка снова от Google.
+     * Комп недоступен вовсе (нет дороги домой) — не застревание: тогда и итог от Google, и строку
+     * было нечем показать.
+     */
+    private fun noteLine(take: PcTake) {
+        if (!take.livePc || take.stream == null) return
+        val outcome = when {
+            !take.stream.reachedHome -> ru.zf.pravka.core.PcAsr.Outcome.UNAVAILABLE
+            take.mux.stuck() -> ru.zf.pravka.core.PcAsr.Outcome.STUCK
+            else -> ru.zf.pravka.core.PcAsr.Outcome.OK
+        }
+        if (outcome == ru.zf.pravka.core.PcAsr.Outcome.STUCK) {
+            app.eventLog.add("строка компа отставала: Google в пилюле ${take.mux.googleShownMs} мс из " +
+                "${take.mux.googleShownMs + take.mux.pcShownMs}, уходила ${take.mux.fallbacks} раз")
+        }
+        if (!liveBreaker.note(outcome)) return
+        val at = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru")).format(java.util.Date())
+        val note = "$at: строка компа отставала ${ru.zf.pravka.core.PcAsr.STUCK_IN_A_ROW} тейка подряд — строка переключена на Google"
+        app.eventLog.add("строка с компа: $note")
+        app.appScope.launch { app.settings.setSpeechLive(ru.zf.pravka.core.PcAsr.FINAL_GOOGLE, note) }
+        Feedback.toast(this, "Строка с компа отстаёт — в пилюле снова Google. Вернуть: Настройки → Микрофон")
     }
 
     /** Два застревания подряд: итог — снова от Google, причина — в настройках и записке. */
@@ -1310,9 +1394,16 @@ class PravkaAccessibilityService : AccessibilityService() {
         text: String,
         health: ru.zf.pravka.core.TakeHealth? = null,
         audio: File? = null,
-        pc: ru.zf.pravka.data.PcAsrStream? = null,
+        take: PcTake? = null,
     ) {
         googleSession = null
+        if (pcTake === take) pcTake = null
+        val pc = take?.stream
+        take?.let {
+            val now = SystemClock.elapsedRealtime()
+            it.timing.googleFinal(now)
+            it.mux.close(now)
+        }
         // Every step below runs on the binder callback that delivers the take:
         // one throw here (screen off -> dead window/FGS token) used to kill the
         // process before the transcript was even journaled. Nothing on this
@@ -1345,11 +1436,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         // cancelled and this launch is a silent no-op - the take would vanish.
         // Keep the recovery draft in that case: that is exactly what it is for.
         val wall = SystemClock.elapsedRealtime() - googleStartedAt
-        if (pc != null && scope.isActive) {
-            finishWithPc(pc, engine, text, health, audio, wall)
+        take?.let { noteLine(it) }
+        if (take != null && pc != null && take.finalPc && scope.isActive) {
+            finishWithPc(take, pc, engine, text, health, audio, wall)
             return
         }
-        deliverLive(engine, text, health, audio, wall, dictationTarget)
+        // Итог от Google: комп звал только строку — ему этот тейк больше не нужен.
+        pc?.cancel()
+        deliverLive(engine, text, health, audio, wall, dictationTarget, timing = take?.let { timingOf(it, engine) })
     }
 
     /**
@@ -1365,6 +1459,7 @@ class PravkaAccessibilityService : AccessibilityService() {
         target: WeakReference<AccessibilityNodeInfo>?,
         googleAlt: String? = null,
         pcNote: String? = null,
+        timing: org.json.JSONObject? = null,
     ) {
         val scopeAlive = scope.isActive
         if (text.isNotBlank() && scopeAlive) scope.launch { insertDictated(text, target) }
@@ -1378,6 +1473,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             audio = audio?.name,
             google = googleAlt,
             pcNote = pcNote,
+            timing = timing,
         )
         // Delivered (and logged to the transcripts) - the recovery draft is no
         // longer needed. Unless the service died mid-take: then nothing was
@@ -1393,6 +1489,7 @@ class PravkaAccessibilityService : AccessibilityService() {
 
     private fun onLiveError(msg: String, engine: String? = null, session: GoogleSpeechSession? = null) {
         googleSession = null
+        pcTake = null
         // Тейк упал, а звук записан — расшифровка с ошибкой и значком: сказанное
         // можно разобрать заново из вкладки Правки, а не надиктовывать снова.
         session?.audioFile?.let { f ->

@@ -142,3 +142,23 @@ def test_contract_names_the_same_paths():
     assert CONTRACT["phone"]["end"]["request"].startswith("POST /asr/end?take=")
     assert CONTRACT["phone"]["drop"]["request"].startswith("POST /asr/drop?take=")
     assert sluh.TAKE_ID.match("take_1795180000000")
+
+
+def test_phone_take_keeps_google_and_timing_in_view(clean, batch):
+    """Тейк с итогом компа: текст Google о том же звуке и замер видны в life.dictations (20.11.2026)."""
+    import copy
+
+    from pravka_archive.ingest import ingest_batch
+
+    ev = copy.deepcopy(next(e for e in batch["events"] if e["kind"] == "pravka.take"))
+    ev["data"].update(engine="gigaam-pc", text="иван привет скажи", google="иван привет",
+                      pc_note="комп: 2,0 с звука, итог 410 мс",
+                      timing={"v": 1, "line": "pc", "final": "pc", "word_lag_med": 420, "rtt_med": 180,
+                              "g_words": [600, 1000], "pc_words": [1020, 1400, 1800]})
+    status, _ = ingest_batch(clean, {**batch, "events": [ev]}, "sasha")
+    assert status == 200
+    row = clean.execute(
+        "SELECT engine, google, pc_note, (timing->>'word_lag_med')::int, jsonb_array_length(timing->'pc_words') "
+        "FROM life.dictations"
+    ).fetchone()
+    assert row == ("gigaam-pc", "иван привет", "комп: 2,0 с звука, итог 410 мс", 420, 3)

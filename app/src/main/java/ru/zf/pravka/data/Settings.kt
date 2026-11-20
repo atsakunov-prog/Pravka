@@ -74,6 +74,8 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_OWN_MIC = booleanPreferencesKey("speech_own_mic")
         private val KEY_SPEECH_FINAL = stringPreferencesKey("speech_final")
         private val KEY_SPEECH_FINAL_NOTE = stringPreferencesKey("speech_final_note")
+        private val KEY_SPEECH_LIVE = stringPreferencesKey("speech_live")
+        private val KEY_SPEECH_LIVE_NOTE = stringPreferencesKey("speech_live_note")
         private val KEY_READY_CHIME = stringPreferencesKey("ready_chime")
         private val KEY_CHIME_AFTER_START = longPreferencesKey("chime_after_start_ms")
         private val KEY_NET_PROBE = booleanPreferencesKey("net_probe")
@@ -429,6 +431,22 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[KEY_SPEECH_FINAL] = value
             it[KEY_SPEECH_FINAL_NOTE] = note
+        }
+    }
+
+    /**
+     * Строка в пилюле «П» — с компа (GigaAM по ходу речи) или от Google (`core/LineMux.kt`,
+     * 20.11.2026; владелец: «в компьютере всё прямо показывается по моментам, когда я диктую. И это
+     * с Гигой… Давай тоже с переключением сделаем»). С завода — комп; отстал — в пилюле Google, два
+     * тейка подряд — выбор сам на Google.
+     */
+    val speechLiveFlow = context.dataStore.data.map { it[KEY_SPEECH_LIVE] ?: ru.zf.pravka.core.PcAsr.FINAL_PC }
+    val speechLiveNoteFlow = context.dataStore.data.map { it[KEY_SPEECH_LIVE_NOTE].orEmpty() }
+
+    suspend fun setSpeechLive(value: String, note: String = "") {
+        context.dataStore.edit {
+            it[KEY_SPEECH_LIVE] = value
+            it[KEY_SPEECH_LIVE_NOTE] = note
         }
     }
 

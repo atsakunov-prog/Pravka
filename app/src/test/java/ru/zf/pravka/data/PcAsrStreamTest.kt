@@ -49,7 +49,11 @@ class PcAsrStreamTest {
                     if (off > have) reply(req, 409, JSONObject().put("have", have))
                     else {
                         have = maxOf(have, off + body.size)
-                        reply(req, 200, JSONObject().put("have", have))
+                        val o = JSONObject().put("have", have).put("ms", 7)
+                        // как «Слух»: строка — с секунды звука, на каждом куске
+                        if (have >= 32_000) o.put("live", JSONObject().put("firm", "иван").put("tent", "привет")
+                            .put("at", have / 32_000.0).put("ms", 5))
+                        reply(req, 200, o)
                     }
                 }
                 "/asr/end" -> {
@@ -73,7 +77,7 @@ class PcAsrStreamTest {
 
     private fun stream(home: FakeHome): PcAsrStream {
         val http = OkHttpClient.Builder().addInterceptor(Interceptor { home.respond(it.request()) }).build()
-        return PcAsrStream(http, "https://home.example:8443/", "t".repeat(40), "take_1", log = {})
+        return PcAsrStream(http, "https://home.example:8443/", "t".repeat(40), "take_1", log = {}, clock = { System.currentTimeMillis() })
     }
 
     /** [seconds] звука кусками по 50 мс, как пишет своя запись. */
@@ -97,6 +101,39 @@ class PcAsrStreamTest {
         val o = home.offs.toList()
         assertEquals(0L, o.first())
         assertTrue(o.zipWithNext().all { (a, b) -> b > a })
+    }
+
+    @Test
+    fun `строка компа из ответа на кусок и замер каждого куска`() = runBlocking {
+        val home = FakeHome()
+        val s = stream(home)
+        val t = ru.zf.pravka.core.TakeTiming(System.currentTimeMillis())
+        s.timing = t
+        val got = java.util.Collections.synchronizedList(mutableListOf<Pair<PcAsr.Live, Long>>())
+        s.onLive = { live, arrivedAt, audioAt -> got += live to (arrivedAt - audioAt) }
+        speak(s, 2.0)
+        s.close(complete = true)
+        assertEquals(Outcome.OK, s.await(5_000).outcome)
+        assertTrue("строка пришла", got.isNotEmpty())
+        assertEquals("иван привет", got.last().first.text)
+        assertTrue(got.all { it.first.audioSec >= 1.0 })
+        val sum = t.summary("pc", "pc", null)
+        // звук написан разом — отправка догоняет кусками побольше, но каждый кусок в замере
+        assertTrue(sum.getInt("chunks") >= 1)
+        assertEquals(7L, sum.getLong("srv_med"))
+        assertTrue(sum.has("rtt_med") && sum.has("net_med"))
+    }
+
+    @Test
+    fun `кусок — полсекунды звука`() = runBlocking {
+        val home = FakeHome()
+        val s = stream(home)
+        speak(s, 0.5)                                   // ровно полсекунды — уходит сама, без стопа
+        val until = System.currentTimeMillis() + 2_000
+        while (home.have < 16_000L && System.currentTimeMillis() < until) Thread.sleep(10)
+        assertEquals(16_000L, home.have)
+        assertEquals(listOf(0L), home.offs.toList())
+        s.cancel()
     }
 
     @Test
@@ -166,7 +203,7 @@ class PcAsrStreamTest {
             Thread.sleep(3_000)
             home.respond(it.request())
         }).build()
-        val s = PcAsrStream(slow, "https://home.example:8443/", "t".repeat(40), "take_2", log = {})
+        val s = PcAsrStream(slow, "https://home.example:8443/", "t".repeat(40), "take_2", log = {}, clock = { System.currentTimeMillis() })
         speak(s, PcAsr.BEHIND_MAX_BYTES / PcAsr.BYTES_PER_SEC + 1.5)
         assertEquals(Outcome.INCOMPLETE, s.await(100).outcome)
     }

@@ -28,8 +28,19 @@ object PcAsr {
     /** Звук: 16 кГц, 16 бит, моно — 32 000 байт в секунду. */
     const val BYTES_PER_SEC = 32_000
 
-    /** Кусок отправки — секунда звука: 32 КБ, запрос на секунду речи. */
-    const val CHUNK_BYTES = BYTES_PER_SEC
+    /**
+     * Кусок отправки — полсекунды звука (16 КБ): комп на каждом куске двигает строку в пилюле
+     * (`LineMux`), и шаг строки — шаг куска. Было секундой, пока строку вёл только Google.
+     */
+    const val CHUNK_BYTES = BYTES_PER_SEC / 2
+
+    /**
+     * Строка компа из ответа на кусок: твёрдое и гипотеза (без знаков, как у Google), до какой
+     * секунды звука досчитано ([audioSec]) и сколько комп считал проход ([passMs]).
+     */
+    data class Live(val firm: String, val tent: String, val audioSec: Double, val passMs: Long) {
+        val text: String get() = listOf(firm, tent).filter { it.isNotBlank() }.joinToString(" ")
+    }
 
     /**
      * Сколько ждать ответа компа после итога Google. Комп к этому мигу посчитал всё, кроме

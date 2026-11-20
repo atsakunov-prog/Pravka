@@ -60,6 +60,8 @@ class TranscriptionLog(private val context: Context) {
         google: String? = null,
         /** Что было с компом в этом тейке, словами («комп не ответил за 2,5 с»). */
         pcNote: String? = null,
+        /** Замер тейка (`core/TakeTiming.kt`): слова Google и компа по времени, дорога домой, итоги. */
+        timing: JSONObject? = null,
     ) {
         // Queued off the main thread: this runs on the stop tap, right before the
         // text has to land in the field.
@@ -98,6 +100,7 @@ class TranscriptionLog(private val context: Context) {
                 if (audio != null) put("audio", audio)
                 if (google != null) put("google", google)
                 if (!pcNote.isNullOrBlank()) put("pc_note", pcNote)
+                if (timing != null) put("timing", timing)
             }
             file.appendText(entry.toString() + "\n")
             onAppend?.invoke()

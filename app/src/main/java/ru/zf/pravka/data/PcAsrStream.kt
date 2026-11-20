@@ -35,7 +35,24 @@ class PcAsrStream(
     private val token: String,
     val takeId: String,
     private val log: (String) -> Unit,
+    // Часы замера (`elapsedRealtime` телефона); в тестах — свои.
+    private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) : MicFeed.Tee {
+
+    /**
+     * Строка компа из ответа на кусок (20.11.2026): что пришло, когда ([Long] — по [clock]) и когда
+     * прозвучал звук, до которого она досчитана. Зовётся на потоке отправки — не ждать в нём.
+     */
+    @Volatile var onLive: ((live: PcAsr.Live, arrivedAt: Long, audioAt: Long) -> Unit)? = null
+
+    /** Замер тейка (`core/TakeTiming.kt`): каждый кусок — круг и счёт компа. */
+    @Volatile var timing: ru.zf.pravka.core.TakeTiming? = null
+
+    /** Когда пришёл первый звук своей записи — нулевая секунда звука тейка по [clock]. */
+    @Volatile private var firstWriteAt = 0L
+
+    /** Комп хоть раз принял кусок: дорога есть (строка, что отстала, — это «застряла», а не «нет дома»). */
+    val reachedHome: Boolean get() = synchronized(lock) { reached && broken?.outcome != Outcome.UNAVAILABLE }
 
     private val base = archiveUrl.trimEnd('/') + "/"
     private val client = http.newBuilder()
@@ -69,6 +86,7 @@ class PcAsrStream(
 
     override fun write(pcm: ByteArray, n: Int) {
         if (n <= 0) return
+        if (firstWriteAt == 0L) firstWriteAt = clock()
         synchronized(lock) {
             if (closed || broken != null) return
             if (pendingLen + n > pending.size) pending = pending.copyOf(maxOf(pending.size * 2, pendingLen + n))
@@ -176,10 +194,19 @@ class PcAsrStream(
     private fun sendChunk(off: Long, piece: ByteArray): Long? {
         var lastWhy = ""
         for (attempt in 0 until RETRIES) {
-            if (attempt > 0) Thread.sleep(BACKOFF_MS[attempt - 1])
+            if (attempt > 0) {
+                timing?.retry()
+                Thread.sleep(BACKOFF_MS[attempt - 1])
+            }
             synchronized(lock) { if (broken != null) return null }
             try {
+                val sentAt = clock()
                 val (code, body) = post("asr/chunk?take=$takeId&off=$off", piece)
+                val now = clock()
+                if (code == 200) {
+                    timing?.chunk(now - sentAt, body.optLong("ms", -1))
+                    body.optJSONObject("live")?.let { l -> deliverLive(l, now) }
+                }
                 when (code) {
                     200, 409 -> return body.optLong("have", -1).takeIf { it >= 0 }
                         ?: run { give(Outcome.UNAVAILABLE, "комп ответил $code без have"); null }
@@ -198,6 +225,13 @@ class PcAsrStream(
     }
 
     private fun reachedNow(): Boolean = synchronized(lock) { reached }
+
+    private fun deliverLive(l: JSONObject, arrivedAt: Long) {
+        val live = PcAsr.Live(l.optString("firm"), l.optString("tent"), l.optDouble("at", 0.0), l.optLong("ms", -1))
+        val audioAt = if (firstWriteAt > 0L) firstWriteAt + (live.audioSec * 1000).toLong() else 0L
+        synchronized(lock) { if (broken != null) return }
+        onLive?.let { sink -> runCatching { sink(live, arrivedAt, audioAt) } }
+    }
 
     private fun give(outcome: Outcome, why: String) {
         synchronized(lock) { breakWith(outcome, why) }

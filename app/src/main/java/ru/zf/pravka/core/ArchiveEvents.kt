@@ -533,6 +533,8 @@ object ArchiveEvents {
             // звуке и что было с компом. У тейков без компа этих полей нет вовсе.
             if (line.has("google")) put("google", line.optString("google"))
             if (line.has("pc_note")) put("pc_note", line.optString("pc_note"))
+            // Замер тейка (core/TakeTiming.kt): строки Google и компа по времени, дорога, итоги.
+            line.optJSONObject("timing")?.let { put("timing", it) }
         })
     }
 

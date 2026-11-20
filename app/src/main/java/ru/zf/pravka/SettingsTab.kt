@@ -1164,7 +1164,7 @@ private fun VoiceSettings(app: PravkaApp) {
             })
             ru.zf.pravka.ui.InfoButton(
                 "Итог тейка",
-                "Строку в пилюле всегда ведёт Google. «Компьютер» — тот же звук по ходу тейка " +
+                "Что вставится в поле. «Компьютер» — тот же звук по ходу тейка " +
                     "уходит домой, и итог считает GigaAM-v3 на компе (как «Диктовка» там): он " +
                     "не теряет куски и ровнее на длинных фразах. На «стоп» Правка ждёт ответ " +
                     "компа до 2,5 с; не дождалась или дома нет связи — вставляет текст Google, " +
@@ -1176,9 +1176,37 @@ private fun VoiceSettings(app: PravkaApp) {
         if (finalNote.isNotBlank()) {
             Text(finalNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (onPc && !ownMic) {
+        // Строка в пилюле — с компа или от Google (20.11.2026, `core/LineMux.kt`; владелец: «в компьютере
+        // всё прямо показывается по моментам, когда я диктую. И это с Гигой… тоже с переключением»).
+        val live by settings.speechLiveFlow.collectAsState(initial = ru.zf.pravka.core.PcAsr.FINAL_PC)
+        val liveNote by settings.speechLiveNoteFlow.collectAsState(initial = "")
+        val liveOnPc = live == ru.zf.pravka.core.PcAsr.FINAL_PC
+        Spacer(Modifier.height(4.dp))
+        Text("Строка в пилюле", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChipRow {
+            PaperChip("Компьютер", selected = liveOnPc, onClick = {
+                scope.launch { settings.setSpeechLive(ru.zf.pravka.core.PcAsr.FINAL_PC) }
+            })
+            PaperChip("Google", selected = !liveOnPc, onClick = {
+                scope.launch { settings.setSpeechLive(ru.zf.pravka.core.PcAsr.FINAL_GOOGLE) }
+            })
+            ru.zf.pravka.ui.InfoButton(
+                "Строка в пилюле",
+                "Слова по ходу речи. «Компьютер» — их считает GigaAM на компе, как строку " +
+                    "«Диктовки»: звук уходит домой каждые полсекунды, и в пилюле то же, что потом " +
+                    "вставится. Первые слова — примерно через секунду, позже, чем у Google. Строка " +
+                    "компа отстала больше чем на 2 с (метро, плохая связь) — в пилюле Google, " +
+                    "пока комп не догонит; так два тейка подряд — выбор сам переключается на Google. " +
+                    "Google слушает всегда — он и запас, и мерка: в каждом тейке пишется, когда " +
+                    "появлялись слова у него и у компа.",
+            )
+        }
+        if (liveNote.isNotBlank()) {
+            Text(liveNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if ((onPc || liveOnPc) && !ownMic) {
             Text(
-                "Без «Микрофон держит Правка» звука для компа нет — итог от Google.",
+                "Без «Микрофон держит Правка» звука для компа нет — и итог, и строка от Google.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

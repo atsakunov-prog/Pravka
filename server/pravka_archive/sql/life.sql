@@ -397,13 +397,19 @@ SELECT r.key                              AS id,
        NULLIF(d->>'mic', '')              AS mic,
        COALESCE(d->>'origin', 'phone')    AS origin,
        NULLIF(d->>'status', '')           AS status,
-       NULLIF(d->>'final', '')            AS final
+       NULLIF(d->>'final', '')            AS final,
+       d->>'google'                       AS google,
+       NULLIF(d->>'pc_note', '')          AS pc_note,
+       d->'timing'                        AS timing
 FROM core.records_life r CROSS JOIN LATERAL (SELECT r.data AS d) x
 WHERE r.kind = 'pravka.take' AND NOT r.deleted;
 COMMENT ON VIEW life.dictations IS 'Каждая диктовка Правки: распознанный текст до чистки. Это всё, что владелец наговаривал в любые поля: сообщения людям, заметки, письма. С 13.10.2026 здесь и диктовки компьютера («Диктовка» на ПК): origin = pc, id = pc-<мс>, чистка — строка life.cleanups с тем же id.';
 COMMENT ON COLUMN life.dictations.origin IS 'Откуда: phone — телефон (Правка), pc — компьютер (Диктовка на ПК).';
 COMMENT ON COLUMN life.dictations.status IS 'Только у компьютера: pasted — вставлено в окно, clipboard — оставлено в буфере, cancelled — отменено (Esc), empty — ничего не разобрал, error — распознавание упало.';
 COMMENT ON COLUMN life.dictations.final IS 'Только у компьютера: что ушло в окно или буфер — после Сонета или словаря.';
+COMMENT ON COLUMN life.dictations.google IS 'Только у телефона с итогом с компа (engine = gigaam-pc, с 20.11.2026): что сказал Google о том же звуке — text от GigaAM, это для сравнения движков.';
+COMMENT ON COLUMN life.dictations.pc_note IS 'Что было с компом в этом тейке, словами: «комп не ответил за 2,5 с», «дома нет связи», сколько считал итог.';
+COMMENT ON COLUMN life.dictations.timing IS 'Замер тейка телефона (с 20.11.2026), мс от тапа: g_first / pc_first — первое слово строки Google / компа; word_lag_med — на сколько k-е слово у компа позже, чем у Google (медиана по словам); pc_lag_med — строка компа позади звука; rtt_* — кусок звука до компа и ответ, srv_med — из них считал комп, net_med — дорога; stop_g / stop_pc — от «стоп» до итога Google / компа; wait — сколько ждали комп после Google; line — чья строка была в пилюле, fallback_ms — сколько показывали Google вместо компа; g_words / pc_words — когда появилось каждое слово.';
 
 CREATE VIEW life.cleanups AS
 SELECT r.key                       AS id,
