@@ -153,6 +153,10 @@ class DictationPill(
 
     companion object {
         private val PAPER = 0xFFF7F3EA.toInt()
+        /** Строка «П» от компа (GigaAM) — обычная бумага. */
+        internal val INK_PC = PAPER
+        /** Строка «П» от Google — голубоватая: видно, кто пишет (20.11.2026). */
+        internal val INK_GOOGLE = 0xFFA8C7FA.toInt()
         /** Как часто спрашивать клавиатуру, пока пилюля видна. */
         private const val POLL_MS = 400L
         /** Строка обновляется не чаще: сглаживает движение она сама. */
@@ -389,6 +393,8 @@ class DictationPill(
     /** Текст и подсказка, пришедшие раньше окна: окно ждёт ответа про отступы. */
     private var pendingText: String? = null
     private var pendingHint: String? = null
+    /** Цвет слов строки — чья она (`ink`); живёт и до окна: строку создают позже. */
+    private var inkColor = PAPER
     private var lastText = ""
     private var lastAt = 0L
     /**
@@ -563,6 +569,15 @@ class DictationPill(
         tv.setTickerText(text)
     }
 
+    /**
+     * Чья строка (20.11.2026; владелец: «у меня в плашке наверху кто теперь показывает — GigaChat
+     * или Google?»): белая — компа (GigaAM), голубоватая — Google. Ставит служба «П» по `LineMux`.
+     */
+    fun ink(color: Int) {
+        inkColor = color
+        ticker?.setInk(color)
+    }
+
     /** Подсказка посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю». */
     fun hint(text: String) {
         val tv = ticker
@@ -685,7 +700,7 @@ class DictationPill(
         row.addView(l, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.MATCH_PARENT).apply {
             marginStart = dp(6)
         })
-        val tv = MarqueeTickerView(service, textColor = PAPER, textSizeSp = textSizeSp)
+        val tv = MarqueeTickerView(service, textColor = inkColor, textSizeSp = textSizeSp)
         row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         // Галочка вопроса «всё ещё …?» — второй кружок, живёт спрятанным.
         val ao = VoiceOrb(service, PillLook.orb(accent)).apply {

@@ -1064,7 +1064,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             scope.launch {
                 if (pcTake === take) {
                     take.timing.pc(arrivedAt, ru.zf.pravka.core.PcAsr.words(live.text), audioAt, live.passMs)
-                    take.mux.onPc(live.text, arrivedAt)?.let { floatingButton?.updateTicker(it) }
+                    take.mux.onPc(live.text, arrivedAt)?.let { showLine(take, it) }
                 }
             }
         }
@@ -1088,7 +1088,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // so the owner knows when to start and stops clipping first words.
             onReady = {
                 speechReady = true
-                floatingButton?.hintTicker(listenHint())
+                floatingButton?.hintTicker(listenHint() + lineTag(take))
                 Haptics.success(this)
             },
             // Live text feeds the on-screen ticker; a throttled copy goes to disk
@@ -1097,7 +1097,7 @@ class PravkaAccessibilityService : AccessibilityService() {
                 // Чья строка в пилюле — решает LineMux: с выбором «Google» это всегда строка Google.
                 val now = SystemClock.elapsedRealtime()
                 take.timing.google(now, live)
-                take.mux.onGoogle(live, now)?.let { floatingButton?.updateTicker(it) }
+                take.mux.onGoogle(live, now)?.let { showLine(take, it) }
                 saveDraftThrottled(live)
             },
             // Finalized chunk: persist immediately (LiveDraft skips it if the
@@ -1121,11 +1121,14 @@ class PravkaAccessibilityService : AccessibilityService() {
         dictationTarget = focusedEditableNode()?.let { WeakReference(it) } ?: cachedFocus
         probeFieldEdits(dictationTarget?.get())
         floatingButton?.setRecording(true)
+        // Чья строка с первого слова (владелец, 20.11.2026: «в плашке наверху кто теперь показывает —
+        // GigaChat или Google?»): белая — комп, голубоватая — Google; уйдёт на Google — перекрасится.
+        floatingButton?.inkTicker(if (take.mux.pcMode) DictationPill.INK_PC else DictationPill.INK_GOOGLE)
         floatingButton?.showTicker()
         // Строка открывается пустой, и эта пустота врёт: слышать движок
         // начинает позже. Пишем в неё, чего ждём, — если он уже успел
         // отозваться, там к этому мигу стоит «говори».
-        if (!speechReady) floatingButton?.hintTicker(waitHint())
+        if (!speechReady) floatingButton?.hintTicker(waitHint() + lineTag(take))
         floatingButton?.showCancelBubble { cancelLiveDictation() }
         Haptics.start(this)
         // Foreground-mic holder so the recognizer survives app switches. If it
@@ -1294,6 +1297,17 @@ class PravkaAccessibilityService : AccessibilityService() {
         pcTake?.timing?.stop(SystemClock.elapsedRealtime())
         session.stop()  // -> onLiveDone
     }
+
+    /** Строка в пилюлю — и цвет по тому, чья она сейчас (`LineMux.source`). */
+    private fun showLine(take: PcTake, text: String) {
+        floatingButton?.inkTicker(
+            if (take.mux.source == ru.zf.pravka.core.LineMux.Source.PC) DictationPill.INK_PC else DictationPill.INK_GOOGLE,
+        )
+        floatingButton?.updateTicker(text)
+    }
+
+    /** Хвост подсказки «слушаю»: строка будет от компа — так и сказано. */
+    private fun lineTag(take: PcTake): String = if (take.mux.pcMode) " · Гига" else ""
 
     /**
      * Отправка звука тейка на комп (`data/PcAsrStream.kt`). null — архив не подключён или имя

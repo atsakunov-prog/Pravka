@@ -138,6 +138,16 @@ class MarqueeTickerView(
         invalidate()
     }
 
+    /**
+     * Цвет слов (20.11.2026): чья строка — у «П» белая строка компа (GigaAM), голубоватая —
+     * Google (`DictationPill.INK_PC` / `INK_GOOGLE`). Подсказка своего цвета не меняет.
+     */
+    fun setInk(color: Int) {
+        if (paint.color == color) return
+        paint.color = color
+        invalidate()
+    }
+
     fun setTickerText(text: String) {
         if (text == full) return
         // Пошли слова — подсказка уступает место, гаснет в кадрах.

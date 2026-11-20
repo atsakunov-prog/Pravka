@@ -14,7 +14,7 @@ package ru.zf.pravka.core
  *
  * Без Android: время — снаружи, под тестом (`LineMuxTest`).
  */
-class LineMux(private val pcMode: Boolean) {
+class LineMux(val pcMode: Boolean) {
 
     enum class Source { NONE, PC, GOOGLE }
 

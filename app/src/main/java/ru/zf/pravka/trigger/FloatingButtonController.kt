@@ -492,6 +492,9 @@ class FloatingButtonController(
     /** Надпись посередине, пока слов нет: «Саша, секунду…», «Саша, слушаю» (`core/PillHint.kt`). */
     fun hintTicker(text: String) = pill.hint(text)
 
+    /** Цвет слов строки — чья она: компа или Google (`DictationPill.ink`). */
+    fun inkTicker(color: Int) = pill.ink(color)
+
     /** Кнопку тащат, экран повернули, настройку крутят — пилюля следом. */
     fun repositionTickerIfVisible() = pill.reposition()
 

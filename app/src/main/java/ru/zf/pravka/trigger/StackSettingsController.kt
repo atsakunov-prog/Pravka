@@ -32,8 +32,6 @@ import ru.zf.pravka.BuildConfig
 import ru.zf.pravka.R
 import ru.zf.pravka.core.DiskLook
 import ru.zf.pravka.core.StackGeometry
-import ru.zf.pravka.data.ModelRoute
-import ru.zf.pravka.data.Models
 import ru.zf.pravka.data.Settings
 import ru.zf.pravka.provider.MicRouting
 import ru.zf.pravka.ui.Haptics
@@ -92,8 +90,14 @@ class StackSettingsController(
         private const val ABSENT_FACTOR = 0.45f
     }
 
-    /** Кружки веера. Порядок в ряду — от шестерёнки: частое ближе, «спрятать» дальше всех. */
-    enum class Knob { MODEL, MIC, UPDATE, HIDE }
+    /**
+     * Кружки веера. Порядок в ряду — от шестерёнки: частое ближе, «спрятать» дальше всех.
+     * Первый — распознавание: GigaAM на компе или Google (20.11.2026; владелец: «на шестерёнке
+     * … клавиша, которая раньше переключала модели. Вот давай сейчас она будет переключать
+     * GigaChat и Google»). До того он переключал модель чистки Опус / Сонет — она осталась в
+     * «Настройки телефона → Модели».
+     */
+    enum class Knob { ENGINE, MIC, UPDATE, HIDE }
 
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val audioManager = service.getSystemService(AudioManager::class.java)
@@ -148,8 +152,10 @@ class StackSettingsController(
     private val noteDismiss = Runnable { hideNote() }
 
     // Состояние переключателей — из настроек, своего не хранит.
-    private var strongModel = true
-    private var modelLabel = ""
+    /** Итог и строка тейка «П» — с компа (`core/PcAsr.kt`, `core/LineMux.kt`). */
+    private var finalPc = true
+    private var livePc = true
+    private val gigaOn: Boolean get() = finalPc || livePc
     private var headset = false
     private var headsetPresent = false
     private var deviceCallback: AudioDeviceCallback? = null
@@ -196,10 +202,15 @@ class StackSettingsController(
 
     init {
         scope.launch {
-            settings.modelChoiceFlow(ModelRoute.PRAVKA).collect {
-                strongModel = it.model != Settings.MODEL_SONNET
-                modelLabel = Models.label(it.model)
-                paintKnob(Knob.MODEL)
+            settings.speechFinalFlow.collect {
+                finalPc = it == ru.zf.pravka.core.PcAsr.FINAL_PC
+                paintKnob(Knob.ENGINE)
+            }
+        }
+        scope.launch {
+            settings.speechLiveFlow.collect {
+                livePc = it == ru.zf.pravka.core.PcAsr.FINAL_PC
+                paintKnob(Knob.ENGINE)
             }
         }
         scope.launch {
@@ -628,7 +639,14 @@ class StackSettingsController(
                 setImageResource(R.drawable.ic_fab_glyph)
                 scaleType = ImageView.ScaleType.FIT_CENTER
             }
-            Knob.MODEL -> KnobGlyph(service, KnobGlyph.Kind.SPARK)
+            // Буква: «Г» — GigaAM на компе, «G» — Google. Ставит её paintKnob.
+            Knob.ENGINE -> TextView(service).apply {
+                gravity = Gravity.CENTER
+                setTextColor(PAPER)
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, size * 0.46f)
+                includeFontPadding = false
+            }
             Knob.UPDATE -> KnobGlyph(service, KnobGlyph.Kind.DOWNLOAD)
         }
         glyph.tag = "glyph"
@@ -648,7 +666,7 @@ class StackSettingsController(
             onTouched?.invoke()
             keepFan()
             when (knob) {
-                Knob.MODEL -> flipModel()
+                Knob.ENGINE -> flipEngine()
                 Knob.MIC -> flipMic()
                 Knob.UPDATE -> checkUpdates()
                 Knob.HIDE -> {
@@ -679,7 +697,7 @@ class StackSettingsController(
     private fun paintKnob(knob: Knob) {
         val bubble = knobs[knob] ?: return
         val on = when (knob) {
-            Knob.MODEL -> strongModel
+            Knob.ENGINE -> gigaOn
             Knob.MIC -> headset
             Knob.UPDATE -> checkingUpdates
             Knob.HIDE -> false
@@ -694,6 +712,9 @@ class StackSettingsController(
             (bubble.findViewWithTag<View>("glyph") as? ImageView)
                 ?.setImageResource(if (headset) R.drawable.ic_mic_headset else R.drawable.ic_mic_phone)
         }
+        if (knob == Knob.ENGINE) {
+            (bubble.findViewWithTag<View>("glyph") as? TextView)?.text = if (gigaOn) "Г" else "G"
+        }
         // Пока кружок выскакивает, его альфу ведёт анимация — не перебивать.
         if (bubble.scaleX >= 0.99f) bubble.alpha = knobAlpha(knob)
     }
@@ -701,27 +722,24 @@ class StackSettingsController(
     // ---- Переключатели ----
 
     /**
-     * Модель чистки: «включено» — Опус (или что-то сильнее Сонета, если
-     * владелец поставил Fable в настройках), «выключено» — Сонет. Тап меняет
-     * на противоположное: с сильной — на Сонет, с Сонета — на Опус.
-     *
-     * Вместе с моделью — её усилие чистки: Опус — medium, Сонет — high. С
-     * 30.09.2026 заводская чистки — Сонет на high, и Опус, включённый одной
-     * моделью, унаследовал бы high: думал бы дольше и дороже того Опуса на
-     * medium, которым чистка работала до этого.
+     * Распознавание «П»: GigaAM на компе (итог и строка в пилюле) или Google — одним тапом оба
+     * выбора из «Микрофон и распознавание». Синий кружок с «Г» — комп хоть в чём-то из двух;
+     * тап с него — оба на Google, с серого «G» — оба на комп. Причина прошлого автопереключения
+     * стирается: выбор сделал владелец.
      */
-    private fun flipModel() {
-        val next = if (strongModel) Settings.MODEL_SONNET else Settings.MODEL_OPUS
-        strongModel = next != Settings.MODEL_SONNET
-        modelLabel = Models.label(next)
-        paintKnob(Knob.MODEL)
+    private fun flipEngine() {
+        val next = if (gigaOn) ru.zf.pravka.core.PcAsr.FINAL_GOOGLE else ru.zf.pravka.core.PcAsr.FINAL_PC
+        finalPc = next == ru.zf.pravka.core.PcAsr.FINAL_PC
+        livePc = finalPc
+        paintKnob(Knob.ENGINE)
         scope.launch {
-            settings.setModel(ModelRoute.PRAVKA, next)
-            settings.setEffort(ModelRoute.PRAVKA, if (next == Settings.MODEL_OPUS) "medium" else "high")
+            settings.setSpeechFinal(next)
+            settings.setSpeechLive(next)
         }
         Haptics.start(service)
-        service.app.eventLog.add("чистка: модель ${Models.label(next)} (кружок шестерёнки)")
-        showNote("Чистка: ${Models.label(next)}")
+        val label = if (finalPc) "GigaAM на компе" else "Google"
+        service.app.eventLog.add("распознавание: $label (кружок шестерёнки)")
+        showNote("Распознавание: $label")
     }
 
     /**
