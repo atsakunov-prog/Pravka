@@ -257,6 +257,7 @@ object Dictations {
             e == "google" -> "Google"
             e == "google-net" -> "Google, по сети"
             e == "google-replay" -> "Google, заново из звука"
+            e == PcAsr.ENGINE -> "GigaAM-v3, на компе"
             e == "whisper-small" -> "Whisper small"
             e == "whisper-base" -> "Whisper base"
             else -> {

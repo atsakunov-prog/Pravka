@@ -215,6 +215,24 @@ class MicFeed private constructor(
         tapeFile = file
     }
 
+    /**
+     * Второй слушатель того же звука, что идёт в файл тейка (20.11.2026): отправка на домашний
+     * комп (`data/PcAsrStream.kt`). Получает куски на потоке записи — обязан не ждать (кладёт в
+     * свою очередь); закрывается там же, где файл: [Tee.close] с complete = true — тейк кончился
+     * стопом и звук целый; false — запись бросили (отмена, отказ пути), звук неполный.
+     */
+    interface Tee {
+        fun write(pcm: ByteArray, n: Int)
+        fun close(complete: Boolean)
+    }
+
+    @Volatile private var tee: Tee? = null
+
+    /** Отдавать звук ещё и [t]. Зовётся до [start]. */
+    fun teeTo(t: Tee) {
+        tee = t
+    }
+
     /** Запустить запись и писателя. false — запись не пошла (микрофон занят, нет прав). */
     fun start(): Boolean {
         runCatching { record.startRecording() }.onFailure {
@@ -400,6 +418,8 @@ class MicFeed private constructor(
                         tape = null
                     }
                 }
+                // Отправка на комп не ждёт сети здесь: кусок — в её очередь, и только.
+                tee?.let { t -> runCatching { t.write(chunk, n) } }
                 val zero = allZero(chunk, n)
                 zeroMs = if (zero) zeroMs + n / BYTES_PER_MS else 0L
                 val db = if (zero) Double.NEGATIVE_INFINITY else dbfs(chunk, n)
@@ -427,6 +447,8 @@ class MicFeed private constructor(
             runCatching { record.stop() }
             runCatching { record.release() }
             tape?.close()
+            // running ещё true — запись кончилась стопом (finishNow): звук целый. abort — нет.
+            tee?.let { t -> runCatching { t.close(complete = running) } }
             if (droppedBytes > 0) log("свой микрофон: распознаватель не читал — выброшено ${droppedBytes / BYTES_PER_MS / 1000} с старого звука")
         }
     }

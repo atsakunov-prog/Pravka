@@ -107,6 +107,8 @@ class Config:
     night_routine: str = ""
     night_token: str = ""
     night_at: str = "03:57"
+    # «Слух» — распознавание звука тейков телефона на этом компе (20.11.2026, `sluh.py`).
+    sluh_url: str = "http://127.0.0.1:8110"
 
     def persons(self) -> list[Person]:
         """Хозяин первым, за ним остальные — в порядке PRAVKA_PEOPLE."""
@@ -197,4 +199,5 @@ def load(env_file: str | None = None) -> Config:
         night_routine=get("PRAVKA_NIGHT_ROUTINE"),
         night_token=get("PRAVKA_NIGHT_TOKEN"),
         night_at=get("PRAVKA_NIGHT_AT", "03:57"),
+        sluh_url=get("PRAVKA_SLUH_URL", "http://127.0.0.1:8110").rstrip("/"),
     )

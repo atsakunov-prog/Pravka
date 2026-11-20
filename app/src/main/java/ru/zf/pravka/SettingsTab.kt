@@ -1148,6 +1148,41 @@ private fun VoiceSettings(app: PravkaApp) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // Итог тейка «П» — с компа или от Google (20.11.2026, `core/PcAsr.kt`; владелец:
+        // «сделаем выбор в настройках… если будет сильно застревать, то перещёлкивает на гугл»).
+        Spacer(Modifier.height(8.dp))
+        val final by settings.speechFinalFlow.collectAsState(initial = ru.zf.pravka.core.PcAsr.FINAL_PC)
+        val finalNote by settings.speechFinalNoteFlow.collectAsState(initial = "")
+        val onPc = final == ru.zf.pravka.core.PcAsr.FINAL_PC
+        Text("Итог тейка «П»", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ChipRow {
+            PaperChip("Компьютер", selected = onPc, onClick = {
+                scope.launch { settings.setSpeechFinal(ru.zf.pravka.core.PcAsr.FINAL_PC) }
+            })
+            PaperChip("Google", selected = !onPc, onClick = {
+                scope.launch { settings.setSpeechFinal(ru.zf.pravka.core.PcAsr.FINAL_GOOGLE) }
+            })
+            ru.zf.pravka.ui.InfoButton(
+                "Итог тейка",
+                "Строку в пилюле всегда ведёт Google. «Компьютер» — тот же звук по ходу тейка " +
+                    "уходит домой, и итог считает GigaAM-v3 на компе (как «Диктовка» там): он " +
+                    "не теряет куски и ровнее на длинных фразах. На «стоп» Правка ждёт ответ " +
+                    "компа до 2,5 с; не дождалась или дома нет связи — вставляет текст Google, " +
+                    "ничего не теряется. Комп застрял два тейка подряд — выбор сам переключается " +
+                    "на Google, причина — строкой ниже. Звук для компа даёт своя запись — нужен " +
+                    "«Микрофон держит Правка».",
+            )
+        }
+        if (finalNote.isNotBlank()) {
+            Text(finalNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (onPc && !ownMic) {
+            Text(
+                "Без «Микрофон держит Правка» звука для компа нет — итог от Google.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         // Звуки диктовки (29.09.2026; владелец: «иногда я просто нажимаю на
         // кнопку — ничего не происходит в наушниках… мне точно нужен фидбэк»;
         // «должны быть звуки по поводу всего: по поводу начала, по поводу конца»).

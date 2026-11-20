@@ -53,6 +53,13 @@ class TranscriptionLog(private val context: Context) {
          * появляется значок «разобрать заново». null — звук не сохранён.
          */
         audio: String? = null,
+        /**
+         * Итог с компа (`core/PcAsr.kt`, 20.11.2026): [text] — от компа, а это — что сказал
+         * Google о том же звуке. Оба в журнале и архиве — сравнивать движки на живых тейках.
+         */
+        google: String? = null,
+        /** Что было с компом в этом тейке, словами («комп не ответил за 2,5 с»). */
+        pcNote: String? = null,
     ) {
         // Queued off the main thread: this runs on the stop tap, right before the
         // text has to land in the field.
@@ -89,6 +96,8 @@ class TranscriptionLog(private val context: Context) {
                 if (stuck > 0) put("stuck", stuck)
                 if (offline != null) put("offline", offline)
                 if (audio != null) put("audio", audio)
+                if (google != null) put("google", google)
+                if (!pcNote.isNullOrBlank()) put("pc_note", pcNote)
             }
             file.appendText(entry.toString() + "\n")
             onAppend?.invoke()

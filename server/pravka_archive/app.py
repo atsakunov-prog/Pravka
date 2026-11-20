@@ -26,7 +26,7 @@ from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions, Re
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import icu, sync, tools
+from . import icu, sluh, sync, tools
 from .auth import SCOPE, OwnerAuth
 from .config import Config, env_suffix
 from .ingest import ingest_batch
@@ -245,6 +245,28 @@ def build(cfg: Config) -> tuple[FastMCP, OwnerAuth]:
         except sync.SyncError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse(payload)
+
+    # Звук тейка «П» — на распознавание компу (20.11.2026, `sluh.py`, `contract/sluh.json`).
+    # Только телефон: у служб компа свой распознаватель, им сюда незачем.
+    async def asr(request: Request, action: str) -> Response:
+        who = await caller(request)
+        if who is None:
+            return JSONResponse({"error": "нет или не тот токен телефона"}, status_code=401)
+        if who != "phone":
+            return JSONResponse({"error": "распознавание звука — только телефону"}, status_code=403)
+        return await sluh.forward(cfg.sluh_url, request, action)
+
+    @mcp.custom_route("/asr/chunk", methods=["POST"])
+    async def asr_chunk(request: Request) -> Response:
+        return await asr(request, "chunk")
+
+    @mcp.custom_route("/asr/end", methods=["POST"])
+    async def asr_end(request: Request) -> Response:
+        return await asr(request, "end")
+
+    @mcp.custom_route("/asr/drop", methods=["POST"])
+    async def asr_drop(request: Request) -> Response:
+        return await asr(request, "drop")
 
     return mcp, auth
 

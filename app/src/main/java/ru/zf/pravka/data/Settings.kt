@@ -72,6 +72,8 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_BIASING = booleanPreferencesKey("speech_biasing")
         private val KEY_SPEECH_NETWORK = booleanPreferencesKey("speech_network")
         private val KEY_SPEECH_OWN_MIC = booleanPreferencesKey("speech_own_mic")
+        private val KEY_SPEECH_FINAL = stringPreferencesKey("speech_final")
+        private val KEY_SPEECH_FINAL_NOTE = stringPreferencesKey("speech_final_note")
         private val KEY_READY_CHIME = stringPreferencesKey("ready_chime")
         private val KEY_CHIME_AFTER_START = longPreferencesKey("chime_after_start_ms")
         private val KEY_NET_PROBE = booleanPreferencesKey("net_probe")
@@ -409,6 +411,25 @@ class Settings(private val context: Context) {
     val speechOwnMicFlow = context.dataStore.data.map { it[KEY_SPEECH_OWN_MIC] ?: true }
     suspend fun setSpeechOwnMic(value: Boolean) {
         context.dataStore.edit { it[KEY_SPEECH_OWN_MIC] = value }
+    }
+
+    /**
+     * Итог тейка «П» — с домашнего компа или от Google (`core/PcAsr.kt`, 20.11.2026; владелец:
+     * «сделаем выбор в настройках. Сейчас временно сделаем с компа, но если будет сильно
+     * застревать, то тогда перещёлкивает на гугл»). С завода — комп; живую строку в пилюле
+     * всё равно ведёт Google, он же — запас на каждый тейк.
+     */
+    val speechFinalFlow = context.dataStore.data.map { it[KEY_SPEECH_FINAL] ?: ru.zf.pravka.core.PcAsr.FINAL_PC }
+
+    /** Почему настройка последний раз переключилась сама (пусто — руками или ни разу). */
+    val speechFinalNoteFlow = context.dataStore.data.map { it[KEY_SPEECH_FINAL_NOTE].orEmpty() }
+
+    /** Выбор итога; [note] — почему, если переключила автоматика (руками — пусто, прежняя причина стирается). */
+    suspend fun setSpeechFinal(value: String, note: String = "") {
+        context.dataStore.edit {
+            it[KEY_SPEECH_FINAL] = value
+            it[KEY_SPEECH_FINAL_NOTE] = note
+        }
     }
 
     /**

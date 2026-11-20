@@ -528,7 +528,12 @@ object ArchiveEvents {
             "error" to line.optString("error"),
             "audio" to line.optString("audio"),
             "mic" to line.optString("mic"),
-        ))
+        ).apply {
+            // Итог с компа (20.11.2026, `core/PcAsr.kt`): рядом — что сказал Google о том же
+            // звуке и что было с компом. У тейков без компа этих полей нет вовсе.
+            if (line.has("google")) put("google", line.optString("google"))
+            if (line.has("pc_note")) put("pc_note", line.optString("pc_note"))
+        })
     }
 
 

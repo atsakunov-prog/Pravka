@@ -68,6 +68,9 @@ class GoogleSpeechSession(
     // Куда писать звук тейка (`data/TakeAudio.kt`, 30.09.2026): пишет своя
     // запись, так что без неё (выключена, путь не берёт наш звук) файла нет.
     private val tape: java.io.File? = null,
+    // Тот же звук — ещё и на домашний комп (`data/PcAsrStream.kt`, 20.11.2026): итог тейка
+    // считает GigaAM, а Google ведёт строку. Без своей записи звука для компа нет — тогда Google.
+    private val tee: MicFeed.Tee? = null,
 ) {
     /** Звук тейка записывался своей записью в [tape]. */
     @Volatile private var taped = false
@@ -1917,6 +1920,7 @@ class GoogleSpeechSession(
             }
         }
         tape?.let { f.tapeTo(it) }
+        tee?.let { f.teeTo(it) }
         if (!f.start()) return false
         taped = tape != null
         feed = f

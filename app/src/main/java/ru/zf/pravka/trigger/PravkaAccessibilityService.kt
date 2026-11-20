@@ -283,6 +283,10 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedBiasingOn: Boolean = true
     // Путь распознавания Google: офлайн-пакет (заводское) или системный с сетью.
     @Volatile internal var cachedNetwork: Boolean = false
+    /** Итог тейка «П» — с компа (`core/PcAsr.kt`, 20.11.2026): Settings.speechFinalFlow. */
+    @Volatile internal var cachedFinalPc: Boolean = true
+    /** Застревания компа подряд — два переключают итог на Google. Живёт, пока жива служба. */
+    private val pcBreaker = ru.zf.pravka.core.PcAsr.Breaker()
     /** Ширина бегущей строки, dp — общая для «П», «З», «Д» и «Т» (Settings.tickerWidthFlow). */
     @Volatile internal var cachedTickerWidthDp: Int = Settings.TICKER_WIDTH_DEFAULT
     /** Где всплывает пилюля диктовки: сверху, снизу или у кнопки — Settings.tickerPlaceFlow. */
@@ -395,6 +399,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
+        }
+        scope.launch {
+            app.settings.speechFinalFlow.collect { cachedFinalPc = it == ru.zf.pravka.core.PcAsr.FINAL_PC }
         }
         scope.launch {
             app.settings.speechNetworkFlow.collect {
@@ -1012,6 +1019,9 @@ class PravkaAccessibilityService : AccessibilityService() {
         // Звук тейка — в файл, чтобы фразу можно было разобрать заново
         // (`data/TakeAudio.kt`); старое сверх 300 МБ уходит на потоке диска.
         ru.zf.pravka.data.DiskWriter.post { runCatching { app.takeAudio.prune() } }
+        val tape = app.takeAudio.newFile()
+        // Итог с компа (`core/PcAsr.kt`): тот же звук своей записи — ещё и домой, по ходу тейка.
+        val pc = if (cachedFinalPc) newPcStream(tape) else null
         val session = GoogleSpeechSession(
             this,
             biasing = if (cachedBiasingOn) cachedBiasing else emptyList(),
@@ -1019,7 +1029,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             segmentedSession = cachedSegmented,
             network = network,
             fromHeadset = headsetTake,
-            tape = app.takeAudio.newFile(),
+            tape = tape,
+            tee = pc,
         )
         googleSession = session
         // Start listening FIRST, then dress the UI: the button, the ticker's
@@ -1047,9 +1058,10 @@ class PravkaAccessibilityService : AccessibilityService() {
                 app.liveDraft.save(text)
             },
             onDone = { text ->
-                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health, session.audioFile)
+                onLiveDone(if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, text, session.health, session.audioFile, pc)
             },
             onError = { msg ->
+                pc?.cancel()
                 onLiveError(msg, if (network) Settings.SPEECH_GOOGLE_NET else Settings.SPEECH_GOOGLE, session)
             },
             onLog = { line -> app.eventLog.add(line) },
@@ -1233,11 +1245,72 @@ class PravkaAccessibilityService : AccessibilityService() {
         session.stop()  // -> onLiveDone
     }
 
+    /**
+     * Отправка звука тейка на комп (`data/PcAsrStream.kt`). null — архив не подключён или имя
+     * звука не годится: тогда итог от Google, как раньше. Без диска: ссылка на архив — в памяти.
+     */
+    private fun newPcStream(tape: File): ru.zf.pravka.data.PcAsrStream? {
+        val link = app.archiveSync.link.value
+        if (link == null) {
+            app.eventLog.add("итог с компа: архив не подключён — итог от Google")
+            return null
+        }
+        val id = ru.zf.pravka.core.PcAsr.takeId(tape.name) ?: return null
+        return ru.zf.pravka.data.PcAsrStream(app.httpClient, link.url, link.token, id) { line ->
+            app.eventLog.add("итог с компа: $line")
+        }
+    }
+
+    /**
+     * Итог тейка с компа: ждать его не дольше `PcAsr.WAIT_MS` (пилюля держит заливку), взять
+     * текст компа или Google (`PcAsr.choose`) и дальше — как всегда. Застрял дважды подряд —
+     * настройка сама переключается на Google (владелец, 20.11.2026: «если будет сильно
+     * застревать, то тогда перещёлкивает на гугл»).
+     */
+    private fun finishWithPc(
+        pc: ru.zf.pravka.data.PcAsrStream,
+        engine: String,
+        google: String,
+        health: ru.zf.pravka.core.TakeHealth?,
+        audio: File?,
+        wall: Long,
+    ) {
+        // Поле — то, что было у тейка: пока ждём комп, новый тейк может переставить цель.
+        val target = dictationTarget
+        val waitFrom = SystemClock.elapsedRealtime()
+        scope.launch {
+            var pick: ru.zf.pravka.core.PcAsr.Pick? = null
+            try {
+                val r = pc.await()
+                val p = ru.zf.pravka.core.PcAsr.choose(engine, google, r)
+                pick = p
+                val waited = SystemClock.elapsedRealtime() - waitFrom
+                app.eventLog.add("итог тейка: ${if (p.engine == ru.zf.pravka.core.PcAsr.ENGINE) "комп" else "Google"} " +
+                    "(${r.outcome.name.lowercase()}, ждали $waited мс) — ${p.note}")
+                if (pcBreaker.note(r.outcome)) flipToGoogle(r.note)
+            } finally {
+                // Служба закрылась посреди ожидания — тейк всё равно в журнал, а черновик цел.
+                val p = pick ?: ru.zf.pravka.core.PcAsr.Pick(engine, google, null, "служба закрылась, пока ждали комп")
+                deliverLive(p.engine, p.text, health, audio, wall, target, p.googleAlt, p.note)
+            }
+        }
+    }
+
+    /** Два застревания подряд: итог — снова от Google, причина — в настройках и записке. */
+    private fun flipToGoogle(why: String) {
+        val at = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru")).format(java.util.Date())
+        val note = "$at: комп застрял ${ru.zf.pravka.core.PcAsr.STUCK_IN_A_ROW} тейка подряд ($why) — итог переключён на Google"
+        app.eventLog.add("итог с компа: $note")
+        app.appScope.launch { app.settings.setSpeechFinal(ru.zf.pravka.core.PcAsr.FINAL_GOOGLE, note) }
+        Feedback.toast(this, "Комп застревает — итог диктовки снова от Google. Вернуть: Настройки → Микрофон")
+    }
+
     private fun onLiveDone(
         engine: String,
         text: String,
         health: ru.zf.pravka.core.TakeHealth? = null,
         audio: File? = null,
+        pc: ru.zf.pravka.data.PcAsrStream? = null,
     ) {
         googleSession = null
         // Every step below runs on the binder callback that delivers the take:
@@ -1255,6 +1328,7 @@ class PravkaAccessibilityService : AccessibilityService() {
             // The gray "отмена" bubble: nothing is inserted or journaled as a
             // take; the draft goes too. Deliberate discard, not a lost take.
             discardTake = false
+            pc?.cancel()
             floatingButton?.hideTicker()
             app.eventLog.add("take discarded (${text.length} ch)")
             app.liveDraft.clear()
@@ -1270,9 +1344,30 @@ class PravkaAccessibilityService : AccessibilityService() {
         // If the SERVICE was destroyed mid-take (system rebind), the scope is
         // cancelled and this launch is a silent no-op - the take would vanish.
         // Keep the recovery draft in that case: that is exactly what it is for.
-        val scopeAlive = scope.isActive
-        if (text.isNotBlank() && scopeAlive) scope.launch { insertDictated(text) }
         val wall = SystemClock.elapsedRealtime() - googleStartedAt
+        if (pc != null && scope.isActive) {
+            finishWithPc(pc, engine, text, health, audio, wall)
+            return
+        }
+        deliverLive(engine, text, health, audio, wall, dictationTarget)
+    }
+
+    /**
+     * Текст тейка — в поле и в «Расшифровки». [googleAlt] — текст Google, когда вставлен текст
+     * компа (оба — в журнал и архив, для сравнения); [pcNote] — что было с компом.
+     */
+    private fun deliverLive(
+        engine: String,
+        text: String,
+        health: ru.zf.pravka.core.TakeHealth?,
+        audio: File?,
+        wall: Long,
+        target: WeakReference<AccessibilityNodeInfo>?,
+        googleAlt: String? = null,
+        pcNote: String? = null,
+    ) {
+        val scopeAlive = scope.isActive
+        if (text.isNotBlank() && scopeAlive) scope.launch { insertDictated(text, target) }
         app.transcriptionLog.append(
             engine = engine,
             audioMs = wall,
@@ -1281,6 +1376,8 @@ class PravkaAccessibilityService : AccessibilityService() {
             error = if (text.isBlank()) "пустой результат" else null,
             health = health,
             audio = audio?.name,
+            google = googleAlt,
+            pcNote = pcNote,
         )
         // Delivered (and logged to the transcripts) - the recovery draft is no
         // longer needed. Unless the service died mid-take: then nothing was
@@ -1539,14 +1636,19 @@ class PravkaAccessibilityService : AccessibilityService() {
     // field if the remembered one went stale (long take / app switch), and
     // tries an automatic PASTE before giving up to the clipboard - the owner
     // shouldn't have to paste large dictations by hand.
-    private suspend fun insertDictated(rawText: String) {
+    private suspend fun insertDictated(
+        rawText: String,
+        // Поле тейка, снятое на стопе: с итогом компа вставка идёт секундой позже, и новый тейк
+        // за это время мог переставить [dictationTarget].
+        target: WeakReference<AccessibilityNodeInfo>? = dictationTarget,
+    ) {
         // Dictated formatting commands ("с новой строки", "абзац") become real
         // breaks locally - instant and free, before the model ever sees them.
         app.eventLog.add("insert: begin len=${rawText.length}")
         val text = ru.zf.pravka.core.VoiceCommands.apply(rawText)
         // Node calls throw when the window died mid-take (screen off, app
         // killed) - that must degrade to the no-field path, not crash.
-        val pinned = runCatching { dictationTarget?.get()?.takeIf { it.refresh() && it.isEditable } }
+        val pinned = runCatching { target?.get()?.takeIf { it.refresh() && it.isEditable } }
             .onFailure { app.eventLog.add("insert: pinned threw ${it.javaClass.simpleName}") }
             .getOrNull()
         val node = pinned ?: runCatching { focusedEditableNode() }
