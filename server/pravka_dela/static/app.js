@@ -1190,7 +1190,7 @@ function route() {
   return { kind: VIEWS[kind] ? kind : 'now' };
 }
 const go = (hash) => { location.hash = hash; };
-window.addEventListener('hashchange', () => { S.sel.clear(); S.dealFilter = null; S.pick.project = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
+window.addEventListener('hashchange', () => { const toT = toTodo(); if (toT) { location.assign(toT); return; } S.sel.clear(); S.dealFilter = null; S.pick.project = null; S.sideOpen = false; S.toTop = true; S.secOn = null; S.tlAll = null; render(); });
 
 // ── Вход ────────────────────────────────────────────────────────────────
 // Владелец — паролем Ковчега, тем же, что у остальных сервисов (22.10.2026: «попроси ссылку у Саши» самому Саше
