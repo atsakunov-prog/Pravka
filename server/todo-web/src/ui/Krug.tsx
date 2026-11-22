@@ -23,7 +23,7 @@ export function setDir(t: Task, key: string) {
   const p = t.project_id ? S.krugProj.get(t.project_id) : null;
   if (p && (p.directions.length || p.why_id) && !t.why_id) {
     const pr = S.projects.get(t.project_id!);
-    toast(`Место задачи проекта — у проекта${pr ? ' «' + pr.name + '»' : ''}: ${dirShort(mainDir(t))}`, undefined, true);
+    toast(`Место задачи задаёт проект${pr ? ' «' + pr.name + '»' : ''} (${dirShort(mainDir(t))}) — брось её на цель или вынь из проекта`, undefined, true);
     return;
   }
   if (mainDir(t) === key && !t.why_id) return;
@@ -75,9 +75,25 @@ export function goalOf(t: Task): Task | null {
   return p?.why_id ? S.tasks.get(p.why_id) || null : null;
 }
 
+// Цель → её задачи — раз на изменение памяти (S.version): дерево на живых данных — сотня целей и тысячи дел, а
+// перебор всех дел на каждую цель и подцель тормозил бы телефон.
+let gAt = -1;
+let gIdx = new Map<Id, Task[]>();
 /** Все задачи под целью: прямо на ней, внутри задач на ней и в проектах, висящих на ней. */
 function goalAll(g: Task): Task[] {
-  return [...S.tasks.values()].filter((t) => isListed(t) && mine(t) && goalOf(t)?.id === g.id);
+  if (gAt !== S.version) {
+    gAt = S.version;
+    gIdx = new Map();
+    for (const t of S.tasks.values()) {
+      if (!isListed(t) || !mine(t)) continue;
+      const k = goalOf(t)?.id;
+      if (!k) continue;
+      const arr = gIdx.get(k);
+      if (arr) arr.push(t);
+      else gIdx.set(k, [t]);
+    }
+  }
+  return [...(gIdx.get(g.id) || [])];
 }
 /** Проекты, висящие на цели. */
 function goalProjects(g: Task): Project[] {
