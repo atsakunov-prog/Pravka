@@ -148,7 +148,7 @@ function DirCard({ k }: { k: string }) {
         {ts.slice(0, 5).map((t) => <MiniTask key={t.id} t={t} />)}
         {!ts.length ? <div className="kr-empty">Пусто — брось сюда задачу</div> : null}
       </div>
-      {ts.length > 5 ? <a className="kr-more" href={'#/dir/' + k}>ещё {ts.length - 5} →</a> : null}
+      {ts.length > 5 ? <a className="kr-more" href={'#/dir/' + k}>ещё {ts.length - 5}</a> : null}
     </section>
   );
 }
@@ -195,7 +195,7 @@ export function KrugView() {
           <div className="sect-h"><i className="dir-dot none" />Без места<span className="n">{loose.length}</span>
             <span className="right"><a className="act" href="#/dir/none">Все</a></span></div>
           <div className="view-sub" style={{ margin: '6px 0 0' }}>Ни цели, ни направления. Перетащи на карточку выше — или оставь разборщику.</div>
-          <TaskList tasks={loose.slice(0, 12)} rowOpts={{ showProject: true, hideDir: true }} nest={false} drop={{ nest: false, onDrop: () => {} }} />
+          <TaskList tasks={loose.slice(0, 12)} rowOpts={{ showProject: true, hideDir: true, placeBtn: true }} nest={false} drop={{ nest: false, onDrop: () => {} }} />
         </div>
       ) : null}
     </Page>
@@ -254,8 +254,8 @@ export function DirView({ dir }: { dir: string }) {
     const loose = [...unplaced()].sort(smart);
     return (
       <Page title={<><i className="dir-dot none" style={{ width: 12, height: 12 }} />Без места</>} crumbs={<a href="#/krug">Круг жизни</a>}
-        sub={<span>Задачи без цели и направления. Брось на направление в боковой панели или открой задачу → «Место в дереве». Разборщик раскладывает их сам раз в полчаса.</span>}>
-        <TaskList tasks={loose} rowOpts={{ showProject: true, hideDir: true }} nest={false} drop={{ nest: false, onDrop: () => {} }}
+        sub={<span>Задачи без цели и направления. Нажми «Разложить» или брось на направление в боковой панели. Разборщик раскладывает их и сам раз в полчаса.</span>}>
+        <TaskList tasks={loose} rowOpts={{ showProject: true, hideDir: true, placeBtn: true }} nest={false} drop={{ nest: false, onDrop: () => {} }}
           empty={<Empty icon="tree" big="Всё разложено" text="У каждой задачи есть место в дереве жизни." />} />
       </Page>
     );
@@ -303,7 +303,7 @@ export function TreeView() {
   if (!krugOn()) return <Page title="Дерево жизни" crumbs="Дерево жизни"><Empty icon="tree" big="Дерево жизни не настроено" /></Page>;
   return (
     <Page title={<><Icon name="tree" size={24} style={{ color: 'var(--accent)' }} />Дерево жизни</>} crumbs={<a href="#/krug">Круг жизни</a>}
-      sub={<span>Направления → цели → задачи. Брось задачу на цель — она ляжет под неё. Цели видишь только ты.</span>}
+      sub={<span>Направления, под ними цели, под целями задачи. Брось задачу на цель — она ляжет под неё. Цели видишь только ты.</span>}
       actions={<a className="tb-btn" href="#/krug"><Icon name="board" size={20} /><span className="d-only">Кругом</span></a>}>
       {S.dirs.map((d) => {
         const top = goalChildren(null, d.key);

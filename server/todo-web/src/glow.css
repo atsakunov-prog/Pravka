@@ -328,3 +328,7 @@
 .kr-add { color: var(--dc); opacity: .55; }
 .kr-card:hover .kr-add, .kr-add:focus-visible { opacity: 1; }
 @media (max-width: 750px) { .kr-add { opacity: 1; } }
+.place-btn { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin-top: 4px; padding: 0 8px; border-radius: 12px; font-size: 12px;
+  color: var(--accent-text); border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.place-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+:root[data-theme="dark"] .place-btn { box-shadow: 0 0 12px -4px color-mix(in srgb, var(--accent) 50%, transparent); }

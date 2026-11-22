@@ -13,6 +13,7 @@ import { openPop } from './pop.tsx';
 import { Scheduler } from './pickers.tsx';
 import { openTask, UI } from './state.ts';
 import { TaskMenu } from './TaskMenu.tsx';
+import { pickPlace } from './Krug.tsx';
 
 export interface RowOpts {
   showProject?: boolean;
@@ -32,6 +33,8 @@ export interface RowOpts {
   hideDate?: boolean;
   /** Не показывать направление дерева жизни (вид самого направления или цели). */
   hideDir?: boolean;
+  /** Кнопка «Разложить» — выбор места в дереве прямо в строке (списки «Без места»; на телефоне перетаскивания нет). */
+  placeBtn?: boolean;
 }
 
 export function Checkbox({ t, onDone }: { t: Task; onDone?: () => void }) {
@@ -179,6 +182,9 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
         <div className="ttl">{t.title}</div>
         {t.notes ? <div className="tdesc">{t.notes.split('\n')[0]}</div> : null}
         <Meta t={t} showProject={opts.showProject} hideDate={opts.hideDate} hideDir={opts.hideDir} />
+        {opts.placeBtn && t.status === 'open' ? (
+          <button className="place-btn" onClick={(e) => { e.stopPropagation(); pickPlace(e.currentTarget, t); }}><Icon name="tree" size={13} />Разложить</button>
+        ) : null}
       </div>
       {t.status === 'open' ? (
         <div className="tacts d-only" onClick={(e) => e.stopPropagation()}>

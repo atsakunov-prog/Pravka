@@ -67,7 +67,7 @@ export function BallView({ kind }: { kind: string }) {
             <TaskList tasks={g.tasks} rowOpts={{ showProject: true }} nest={false} drop={{ nest: false, onDrop: () => {} }} />
           </div>
         ))}
-        {!all.length ? <Empty icon="users" big="Никого не жду" text="Задача, где мяч у другого: в окне задачи «кто делает» → «жду от…», или «жду» в строке." /> : null}
+        {!all.length ? <Empty icon="users" big="Никого не жду" text="Задача, где мяч у другого: в окне задачи «кто делает» — «жду от…», или «жду» в строке." /> : null}
       </Page>
     );
   }
