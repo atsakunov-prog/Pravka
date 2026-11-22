@@ -10,7 +10,7 @@ export interface ViewOpts {
   calMode?: '3d' | 'week' | 'month'; // календарь: 3 дня, неделя (с завода), месяц
   calRepeats?: boolean; // будущие разы повторов
   calColor?: 'priority' | 'project'; // раскраска блоков
-  group?: 'none' | 'date' | 'added' | 'deadline' | 'priority' | 'label' | 'project';
+  group?: 'none' | 'date' | 'added' | 'deadline' | 'priority' | 'label' | 'project' | 'dir' | 'ball';
   sort?: 'manual' | 'date' | 'added' | 'deadline' | 'priority' | 'name' | 'project';
   done?: boolean;
   fdue?: 'all' | 'today' | 'over' | 'week' | 'next7' | 'none'; // фильтр по сроку
@@ -19,7 +19,8 @@ export interface ViewOpts {
   flabel?: string; // '' — все
 }
 
-export const GROUP_BY: Record<string, string> = { date: 'сроку', added: 'дате добавления', deadline: 'дедлайну', priority: 'приоритету', label: 'меткам', project: 'проекту' };
+export const GROUP_BY: Record<string, string> = { date: 'сроку', added: 'дате добавления', deadline: 'дедлайну', priority: 'приоритету', label: 'меткам', project: 'проекту',
+  dir: 'дереву жизни', ball: 'мячу' };
 export const SORT_BY: Record<string, string> = { date: 'сроку', added: 'дате добавления', deadline: 'дедлайну', priority: 'приоритету', name: 'алфавиту', project: 'проекту' };
 
 /** Что поменяно против умолчаний — для подписи кнопки и числа рядом. */

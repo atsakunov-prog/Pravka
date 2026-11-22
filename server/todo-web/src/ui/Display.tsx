@@ -9,6 +9,7 @@ import type { Chain } from '../order.ts';
 import { sorted } from '../views.ts';
 import { dealShort, projectName } from '../lib.ts';
 import { filterTasks, type ViewOpts } from '../viewopts.ts';
+import { dirFull, krugOn, mainDir } from '../krug.ts';
 import { Icon } from './icons.tsx';
 
 export type { ViewOpts };
@@ -63,6 +64,17 @@ export function groupTasks(ts: Task[], group: ViewOpts['group']): { key: string;
     } else if (group === 'label') {
       if (!(t.labels || []).length) put('~', 'Без меток', '~', t);
       for (const l of t.labels || []) put('l' + l, l, l, t);
+    } else if (group === 'dir') {
+      // Дерево жизни (23.11.2026): по главному направлению, в порядке круга; без места — в конце.
+      const k = mainDir(t);
+      const i = k ? S.dirs.findIndex((d) => d.key === k) : -1;
+      put(k || '~', k ? dirFull(k) : 'Без места', k ? String(100 + Math.max(i, 0)) : '999', t);
+    } else if (group === 'ball') {
+      // Мяч — группы прежних Дел (10.10.2026, «базовая группировка»): Отбить — ждут от меня, Запустить — моё,
+      // Мониторить — жду от других; повестка — к «Запустить» (как было).
+      if (t.ball === 'waiting') put('check', 'Мониторить — жду от других', '3', t);
+      else if (t.owed) put('owed', 'Отбить — ждут от меня', '1', t);
+      else put('self', 'Запустить — моё', '2', t);
     } else if (group === 'project') {
       const k = t.deal_id || t.project_id || 'inbox';
       put(k, t.deal_id ? `${projectName(t.project_id)} / ${dealShort(t.deal_id)}` : projectName(t.project_id), projectName(t.project_id), t);
@@ -105,7 +117,8 @@ export function DisplayMenu({ vkey, opts, board = true, groups = true }: { vkey:
       <div className="msep" />
       <div className="dm-h">Сортировать</div>
       {groups && opts.layout !== 'calendar' ? sel('Группировка', opts.group, 'none', [['none', 'Нет'], ['date', 'По сроку'], ['added', 'По дате добавления'], ['deadline', 'По дедлайну'],
-        ['priority', 'По приоритету'], ['label', 'По метке'], ['project', 'По проекту']], (v) => set({ group: v })) : null}
+        ['priority', 'По приоритету'], ['label', 'По метке'], ['project', 'По проекту'], ['ball', 'Отбить / Запустить / Мониторить'],
+        ...(krugOn() ? [['dir', 'По дереву жизни'] as ['dir', string]] : [])], (v) => set({ group: v })) : null}
       {sel('Сортировка', opts.sort, 'manual', [['manual', 'Вручную'], ['date', 'По сроку'], ['added', 'По дате добавления'], ['deadline', 'По дедлайну'],
         ['priority', 'По приоритету'], ['name', 'По алфавиту'], ['project', 'По проекту']], (v) => set({ sort: v }))}
       <div className="msep" />

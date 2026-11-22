@@ -1,20 +1,20 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
-import { uuid } from '../api.ts';
+import { api, uuid } from '../api.ts';
 import { CalendarView } from './Calendar.tsx';
 import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
 import { setDue, setPlace } from './acts.ts';
 import { T } from '../toastText.ts';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, pluralForm, WD, WD_SHORT, weekday } from '../dates.ts';
+import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, pluralForm, shortDate, WD, WD_SHORT, weekday } from '../dates.ts';
 import { compile, FilterError, runFilter } from '../filter.ts';
 import { crmUrl, dealShort, go, projectColor, STAGE } from '../lib.ts';
 import { op1, ops, S, saveNowOrder, saveTodo, setTask, todoSettings, toast, useStore } from '../store.ts';
 import type { Id, Task } from '../types.ts';
 import {
-  byPos, completedRecent, dayList, search as searchAll, dealTasks, dirName, goalChildren, goalDir, goalTasks, goals, inbox, isListed, labelTasks,
-  listed, liveDeals, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays, whyPath,
+  completedRecent, dayList, search as searchAll, dealTasks, inbox, labelTasks,
+  listed, liveDeals, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays,
 } from '../views.ts';
 import { filterCtx } from './ctx.ts';
 import { DisplayMenu, groupTasks, shown, viewOpts } from './Display.tsx';
@@ -27,6 +27,35 @@ import { TaskList, reorder, draggingId, setDragId } from './TaskList.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import { openTask } from './state.ts';
 import { DayStrip } from './DayStrip.tsx';
+import { bellCount } from './Bell.tsx';
+import { planDone } from './Plan.tsx';
+import { reviewDue } from './Week.tsx';
+import { ballCounts } from './Ball.tsx';
+
+/** Над списком «Сейчас» и «Сегодня» (23.11.2026, владелец: «мне дела просто некуда записывать»): одна строка, куда
+ *  пишется всё — задача, мысль, «напомни». Нажал — быстрый ввод с умолчаниями вида; дерево жизни разложит само.
+ *  Ниже — что ждёт решения: вопросы автоматики, план дня, обзор недели, просьбы людей. */
+function DayTop({ add }: { add: Record<string, unknown> }) {
+  useStore();
+  const n = bellCount();
+  const owed = ballCounts().owed;
+  const cards: ReactNode[] = [];
+  if (!planDone()) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="sun" size={18} /><span><b>Спланировать день</b><small>что горит и что двигает жизнь — за пару минут</small></span><Icon name="chevR" size={16} /></a>);
+  if (n) cards.push(<a key="new" className="nudge n-new" href="#/new"><Icon name="bell" size={18} /><span><b>Новое: {plural(n, 'вопрос', 'вопроса', 'вопросов')}</b><small>из встреч и переписки — ждут твоего слова</small></span><Icon name="chevR" size={16} /></a>);
+  if (owed) cards.push(<a key="owed" className="nudge n-owed" href="#/ball/owed"><Icon name="arrowUp" size={18} /><span><b>Ждут от меня: {owed}</b><small>люди ждут — отбить первым</small></span><Icon name="chevR" size={16} /></a>);
+  if (reviewDue() && new Date().getDay() % 6 === 0) cards.push(<a key="week" className="nudge n-week" href="#/week"><Icon name="upcoming" size={18} /><span><b>Обзор недели</b><small>куда ушла неделя по дереву жизни</small></span><Icon name="chevR" size={16} /></a>);
+  return (
+    <>
+      <button className="capture" onClick={() => openQuick(add as never)}>
+        <span className="plus"><Icon name="plus" size={18} sw={2} /></span>
+        <span className="ph">Записать задачу, мысль или «напомни…»</span>
+        <span className="kbd d-only">Q</span>
+        <span className="mic" onClick={(e) => { e.stopPropagation(); openDictate(); }} title="Надиктовать"><Icon name="mic" size={18} /></span>
+      </button>
+      {cards.length ? <div className="nudges">{cards}</div> : null}
+    </>
+  );
+}
 
 // ── Каркас вида: шапка, заголовок, кнопки справа ──────────────────────────
 
@@ -94,7 +123,7 @@ function DisplayBtn({ vkey, board, groups }: { vkey: string; board?: boolean; gr
   );
 }
 
-const Empty = ({ icon = 'done', big, text }: { icon?: string; big: string; text?: string }) => (
+export const Empty = ({ icon = 'done', big, text }: { icon?: string; big: string; text?: string }) => (
   <div className="empty"><Icon name={icon} size={56} sw={1} /><div className="big">{big}</div>{text ? <div>{text}</div> : null}</div>
 );
 
@@ -143,7 +172,7 @@ export function NowView() {
   useStore();
   const list = nowList();
   return (
-    <Page title="Сейчас" icon={<Icon name="bolt" size={26} style={{ color: 'var(--accent)' }} />} crumbs="Сейчас" top={<DayStrip />}
+    <Page title="Сейчас" icon={<Icon name="bolt" size={26} style={{ color: 'var(--accent)' }} />} crumbs="Сейчас" top={<><DayStrip /><DayTop add={{ focus_on: S.today }} /></>}
       sub={<span>{list.length ? plural(list.length, 'задача', 'задачи', 'задач') + ' — то, что ты сам отметил на сегодня' : 'Отмеченное тобой на сегодня'}</span>}>
       <TaskList tasks={list} rowOpts={{ showProject: true }} nest={false} add={{ focus_on: S.today }}
         drop={{ nest: false, onDrop: (d, target, m) => {
@@ -167,7 +196,7 @@ export function InboxView() {
   return (
     <Page title="Входящие" crumbs="Входящие" actions={<DisplayBtn vkey="inbox" board={false} />}>
       <Displayed tasks={list} vkey="inbox" add={{}} />
-      {!list.length ? <Empty icon="inbox" big="Во «Входящих» пусто" text="Сюда падает всё без проекта." /> : null}
+      {!list.length ? <Empty icon="inbox" big="Во «Входящих» пусто" text="Сюда падает всё, что записал без проекта: Q на компе, «+» на телефоне, голосом секретарю в Telegram. Разборщик сам раскладывает это по дереву жизни." /> : null}
     </Page>
   );
 }
@@ -191,8 +220,12 @@ export function TodayView() {
     }} />
   ), { cls: 'sched' });
   const dropToday = { nest: false, onDrop: (d: Task) => { if (d.due_date !== S.today) setDue(d, { due_date: S.today }); } };
+  // «Сегодня» с группировкой (23.11.2026): с завода — мяч прежних Дел (Отбить / Запустить / Мониторить, слово владельца
+  // 10.10 — «базовая группировка»), в «Отображении» — любая другая или «Нет», как у Todoist.
+  const to = viewOpts('today');
+  const todayGroups = groupTasks(today, to.group ?? 'ball');
   return (
-    <Page title="Сегодня" crumbs="Сегодня" top={<DayStrip />} sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
+    <Page title="Сегодня" crumbs="Сегодня" top={<><DayStrip /><DayTop add={{ due_date: S.today }} /></>} actions={<DisplayBtn vkey="today" board={false} />} sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
       {over.length ? (
         <div className="sect over">
           <div className="sect-h">
@@ -209,7 +242,14 @@ export function TodayView() {
           onDrop={(e) => { e.preventDefault(); const d = draggingId() && S.tasks.get(draggingId()!); if (d) dropToday.onDrop(d); }}>
           {dayHead(S.today, S.today).join(' · ')}<span className="n">{today.length || ''}</span>
         </div>
-        <TaskList tasks={today} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={{ due_date: S.today }} drop={dropToday} />
+        {todayGroups.length === 1 && !todayGroups[0].title
+          ? <TaskList tasks={today} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={{ due_date: S.today }} drop={dropToday} />
+          : todayGroups.map((g, i) => (
+            <div key={g.key} className="sect" style={{ marginTop: i ? 14 : 4 }}>
+              <div className="sect-h sub-h">{g.title}<span className="n">{g.tasks.length}</span></div>
+              <TaskList tasks={g.tasks} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={i === todayGroups.length - 1 ? { due_date: S.today } : false} drop={dropToday} />
+            </div>
+          ))}
       </div>
       {!n ? <Empty big="Всё сделано!" text="На сегодня задач нет — хорошего дня." /> : null}
     </Page>
@@ -362,6 +402,50 @@ function StatusPanel({ pid }: { pid: Id }) {
   );
 }
 
+/** Клиент над задачами проекта (23.11.2026, из прежних Дел — карточка клиента, которой у Todoist нет): люди клиента,
+ *  последнее по хронологии CRM и что дальше, живые сделки. Только чтение; правка — в CRM по ссылке. Свернуть — запомнит. */
+function ClientPanel({ pid }: { pid: Id }) {
+  const [d, setD] = useState<any>(null);
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem('todo.client') !== '0'; } catch { return true; } });
+  useEffect(() => {
+    let live = true;
+    setD(null);
+    api<any>('/api/view/client?project_id=' + pid).then((x) => { if (live) setD(x); }).catch(() => { if (live) setD({}); });
+    return () => { live = false; };
+  }, [pid]);
+  const toggle = () => { setOpen(!open); try { localStorage.setItem('todo.client', open ? '0' : '1'); } catch { /* */ } };
+  if (!d) return null;
+  const tl = ((d.timeline || []) as any[]).filter((x) => !x.deleted_at).slice(0, 4);
+  const people = ((d.people || []) as any[]).slice(0, 10);
+  const desc = d.project?.description as string | undefined;
+  if (!tl.length && !people.length && !desc) return null;
+  return (
+    <div className={'client-p' + (open ? '' : ' closed')}>
+      <button className="cp-h" onClick={toggle}>
+        <Icon name={open ? 'chevD' : 'chevR'} size={16} />Клиент{tl[0] ? <span className="cp-last">последнее — {shortDate(String(tl[0].at).slice(0, 10), S.today)}</span> : null}
+        <a className="cp-crm" href={crmUrl('p', pid)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>CRM ↗</a>
+      </button>
+      {open ? (
+        <div className="cp-b">
+          {desc ? <div className="cp-desc">{desc}</div> : null}
+          {people.length ? (
+            <div className="cp-people">
+              {people.map((p) => <a key={p.id} className="chip" href={'#/person/' + p.id}><Icon name="user" size={14} />{p.name}{p.role ? <span style={{ color: 'var(--fg3)' }}>{p.role}</span> : null}</a>)}
+            </div>
+          ) : null}
+          {tl.map((x, i) => (
+            <div key={x.id || i} className="cp-tl">
+              <b>{shortDate(String(x.at).slice(0, 10), S.today)}</b>
+              <span>{x.summary || x.title || ''}{x.deal_name ? <span className="cp-deal"> · {x.deal_name}</span> : null}
+                {x.next_step ? <span className="cp-next">дальше: {x.next_step}</span> : null}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /** «Поделиться» (как в шапке Todoist): ссылка на проект — системным «Поделиться» телефона, иначе в буфер. Доступ
  *  команды к проекту даётся в CRM, не здесь. */
 async function shareProject(p: { id: Id; name: string }) {
@@ -449,6 +533,7 @@ export function ProjectView({ id }: { id: Id }) {
   return (
     <Page title={title} crumbs="Мои проекты /" sub={header} actions={actions}>
       {UI.pstat ? <StatusPanel pid={id} /> : null}
+      {p.kind === 'client' ? <ClientPanel pid={id} key={id} /> : null}
       {grouped ? <Displayed tasks={[...own, ...deals.flatMap((d) => dealTasks(d.id))]} vkey={vkey} add={{ project_id: id }} /> : (
         <>
           <div className="sect">
@@ -689,73 +774,6 @@ export function FilterDialog({ f, close }: { f?: { id: string; name: string; que
         <div className="foot"><button className="btn sec" onClick={close}>Отмена</button><button className="btn pri" disabled={!name.trim() || !query.trim() || !!err} onClick={save}>Сохранить</button></div>
       </div>
     </div>
-  );
-}
-
-// ── Дерево целей ─────────────────────────────────────────────────────────
-
-function GoalRow({ g, depth }: { g: Task; depth: number }) {
-  const kids = goalChildren(g.id);
-  const tasks = goalTasks(g.id);
-  const [open, setOpen] = useState(depth < 1);
-  return (
-    <>
-      <div className="goal" style={{ paddingLeft: depth * 24 }} onClick={() => go('goal/' + g.id)}>
-        {kids.length ? <button className="icon-btn sm" onClick={(e) => { e.stopPropagation(); setOpen(!open); }}><Icon name={open ? 'chevD' : 'chevR'} size={16} /></button> : <span style={{ width: 24 }} />}
-        <Icon name="target" size={18} style={{ color: 'var(--accent)' }} />
-        <span>{g.title}</span>
-        {g.rhythm ? <span className="rh">↻ {g.rhythm}</span> : null}
-        <span className="n">{tasks.length ? plural(tasks.length, 'задача', 'задачи', 'задач') : ''}</span>
-      </div>
-      {open ? kids.map((k) => <GoalRow key={k.id} g={k} depth={depth + 1} />) : null}
-    </>
-  );
-}
-
-export function TreeView({ dir }: { dir?: string }) {
-  useStore();
-  const dirs = S.dirs.length ? S.dirs : [...new Set(goals().map((g) => goalDir(g)).filter(Boolean))].map((k) => ({ key: k! }));
-  const shown = dir ? dirs.filter((d) => d.key === dir) : dirs;
-  return (
-    <Page title={<><Icon name="tree" size={24} style={{ color: 'var(--accent)' }} />{dir ? dirName(dir) : 'Дерево жизни'}</>} crumbs={dir ? <a href="#/tree">Дерево жизни</a> : 'Дерево жизни'}
-      sub={<span>Цели по направлениям; под целью — задачи, которые к ней ведут. Цель видишь только ты.</span>}>
-      {shown.map((d) => {
-        const top = goalChildren(null, d.key);
-        return (
-          <div key={d.key} className="sect">
-            <div className="sect-h"><a href={'#/dir/' + d.key}>{dirName(d.key)}</a><span className="n">{top.length || ''}</span></div>
-            {top.map((g) => <GoalRow key={g.id} g={g} depth={0} />)}
-            {!top.length ? <div style={{ color: 'var(--fg3)', padding: '8px 0' }}>Целей нет</div> : null}
-          </div>
-        );
-      })}
-    </Page>
-  );
-}
-
-export function GoalView({ id }: { id: Id }) {
-  useStore();
-  const g = S.tasks.get(id);
-  if (!g) return <Page title="Цель не найдена"><Empty icon="target" big="Такой цели нет" /></Page>;
-  const path = whyPath(g);
-  const dir = goalDir(g);
-  const kids = goalChildren(id);
-  const tasks = goalTasks(id);
-  // Задачи, вложенные в задачи этой цели, — под ними (дела внутри дела).
-  const deep = [...S.tasks.values()].filter((t) => isListed(t) && t.why_id && !t.why_goal && tasks.some((x) => x.id === t.why_id));
-  return (
-    <Page title={<><Icon name="target" size={24} style={{ color: 'var(--accent)' }} />{g.title}</>}
-      crumbs={<span><a href="#/tree">Дерево жизни</a>{dir ? <> / <a href={'#/dir/' + dir}>{dirName(dir)}</a></> : null}{path.map((x) => <span key={x.id}> / <a href={'#/goal/' + x.id}>{x.title}</a></span>)}</span>}
-      sub={<span>{g.rhythm ? '↻ ' + g.rhythm + ' · ' : ''}{g.no_steps ? 'ориентир без задач' : plural(tasks.length, 'задача', 'задачи', 'задач')}</span>}
-      actions={<button className="tb-btn" onClick={() => openTask(g.id)}><Icon name="pencil" size={18} /><span className="d-only">Цель</span></button>}>
-      {kids.length ? (
-        <div className="sect"><div className="sect-h">Цели внутри<span className="n">{kids.length}</span></div>{kids.map((k) => <GoalRow key={k.id} g={k} depth={0} />)}</div>
-      ) : null}
-      <div className="sect">
-        <div className="sect-h">Задачи<span className="n">{tasks.length || ''}</span></div>
-        <TaskList tasks={[...tasks, ...deep].sort(byPos)} rowOpts={{ showProject: true }} add={g.no_steps ? false : { why_id: id }} drop={{}} />
-      </div>
-    </Page>
   );
 }
 

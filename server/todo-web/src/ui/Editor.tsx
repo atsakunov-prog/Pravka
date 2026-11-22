@@ -14,8 +14,11 @@ import { byPos, liveDeals, parentOf, projectsSorted, sectionsOf } from '../views
 import { quickCtx } from './ctx.ts';
 import { Icon, PrioFlag } from './icons.tsx';
 import { openPop } from './pop.tsx';
-import { GoalPicker, LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler, type DueVal, type Place } from './pickers.tsx';
+import { LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler, type DueVal, type Place } from './pickers.tsx';
 import { openDialog, openDictate, type QuickDefaults } from './state.ts';
+import { DirDot, PlacePicker } from './Krug.tsx';
+import { dirByWord, dirShort, krugOn } from '../krug.ts';
+import { goals } from '../views.ts';
 
 interface Manual {
   due?: DueVal;
@@ -25,6 +28,7 @@ interface Manual {
   person_id?: Id | null;
   deadline?: string | null;
   why_id?: Id | null;
+  dir?: string | null;
   now?: boolean;
 }
 
@@ -58,7 +62,7 @@ function HighlightInput({ value, onChange, parsed, onKeyDown, placeholder, input
   );
 }
 
-interface Sugg { label: string; insert: string; icon: React.ReactNode }
+interface Sugg { label: string; insert: string; icon: React.ReactNode; goal?: Id }
 
 export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?: QuickDefaults; onClose: () => void; inline?: boolean; keepOpen?: boolean }) {
   const [text, setText] = useState('');
@@ -70,7 +74,19 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const descRef = useRef<HTMLTextAreaElement>(null);
   const [descWanted, setDescWanted] = useState(false);
   const ctx = useMemo(() => quickCtx(), []);
-  const parsed = useMemo(() => parseQuick(text, ctx), [text, ctx]);
+  // «~Здоровье» — направление дерева жизни (23.11.2026): своё слово строки поверх разбора quick.ts — вырезается из
+  // названия и подсвечивается, как остальное распознанное. Цель — выбором из подсказки «~» (у целей длинные имена).
+  const parsed = useMemo(() => {
+    const p = parseQuick(text, ctx);
+    if (!krugOn()) return p;
+    const m = /(^|\s)~([^\s~#@%+/]+)/u.exec(text);
+    const k = m ? dirByWord(m[2]) : null;
+    if (!m || !k) return p;
+    const start = m.index + m[1].length, end = start + 1 + m[2].length;
+    const word = text.slice(start, end);
+    return { ...p, title: p.title.replace(word, '').replace(/\s{2,}/g, ' ').trim(), dir: k,
+      tokens: [...p.tokens, { start, end, kind: 'dir' as TokKind }].sort((a, b) => a.start - b.start) };
+  }, [text, ctx]);
   // Крестик на чипе распознанного (как «Убрать» у Todoist): вырезать его слова из строки — иначе строка распознает снова.
   const cut = (kind: TokKind, word?: string) => setText(cutTokens(text, parsed, kind, word));
 
@@ -85,7 +101,9 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const labels = [...new Set([...(man.labels ?? defaults.labels ?? []), ...parsed.labels])];
   const person = parsed.person_id ?? (man.person_id !== undefined ? man.person_id : defaults.person_id ?? null);
   const deadline = parsed.deadline ?? (man.deadline !== undefined ? man.deadline : null);
-  const why = man.why_id !== undefined ? man.why_id : defaults.why_id ?? null;
+  const pdir = (parsed as { dir?: string }).dir;
+  const why = pdir ? null : man.why_id !== undefined ? man.why_id : defaults.why_id ?? null;
+  const dir = why ? null : pdir || (man.dir !== undefined ? man.dir : (defaults.directions || [])[0] ?? null);
   const now = parsed.now || man.now || defaults.focus_on === S.today;
   const notes = [parsed.notes, desc.trim()].filter(Boolean).join('\n') || null;
   // «!15:00» без дня — в день срока; срока нет — сегодня, а если время прошло — завтра.
@@ -97,7 +115,7 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   // Подсказки при наборе #, /, @, %, +
   const before = text.slice(0, caret);
   // Набранное после знака — поиск, хоть с пробелами («#Альфа Г»): список живёт, пока что-то совпадает.
-  const tm = before.match(/(?:^|\s)([#@%+/])([^#@%+/\n]{0,40})$/);
+  const tm = before.match(/(?:^|\s)([#@%+/~])([^#@%+/~\n]{0,40})$/);
   const trig = tm ? { ch: tm[1], part: tm[2] } : null;
   const sugg: Sugg[] = useMemo(() => {
     if (!trig) return [];
@@ -112,6 +130,13 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
         for (const d of liveDeals(p.id)) if (ok(d.name)) out.push({ label: d.name, insert: d.name, icon: <Icon name="deal" size={16} /> });
       }
       return out.slice(0, 8);
+    }
+    if (ch === '~') {
+      // Дерево жизни: направления, потом цели. Направление вставляется словом (~Здоровье), цель — ставится чипом.
+      const out: Sugg[] = S.dirs.filter((d) => ok(dirShort(d.key)) || ok(String(d.name || ''))).map((d) => ({
+        label: String(d.name || d.short || d.key), insert: dirShort(d.key).replace(/\s+/g, ''), icon: <DirDot k={d.key} size={10} /> }));
+      for (const g of goals()) if (!g.no_steps && part.length >= 2 && ok(g.title)) out.push({ label: g.title, insert: '', icon: <Icon name="target" size={16} />, goal: g.id });
+      return out.slice(0, 10);
     }
     if (ch === '/') {
       return sectionsOf(place.project_id || '').filter((s) => ok(s.name)).map((s) => ({ label: s.name, insert: s.name, icon: <Icon name="list" size={16} /> })).slice(0, 8);
@@ -129,6 +154,16 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const pickSugg = (s: Sugg) => {
     if (!trig) return;
     const start = caret - trig.part.length;
+    if (s.goal) {
+      // цель — не словом в строке, а чипом «Место»: «~» с набранным убираем
+      const next = (text.slice(0, start - 1) + text.slice(caret)).replace(/\s{2,}/g, ' ');
+      setText(next);
+      setMan({ ...man, why_id: s.goal, dir: null });
+      const c = Math.max(0, start - 1);
+      setCaret(c);
+      requestAnimationFrame(() => { ref.current?.setSelectionRange(c, c); ref.current?.focus(); });
+      return;
+    }
     const next = text.slice(0, start) + s.insert + ' ' + text.slice(caret);
     setText(next);
     const c = start + s.insert.length + 1;
@@ -151,6 +186,7 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
       if (remindAt) task.remind_at = remindAt;
       if (remindPlace) task.remind_place = remindPlace;
       if (why) task.why_id = why;
+      else if (dir) task.directions = [dir];
       return { op: 'task.create', task };
     };
     const items = lines.length > 1 && confirm(`Добавить ${lines.length} задач — по одной на строку?`)
@@ -202,7 +238,7 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
     : proj ? proj.name + (place.section_id ? ' / ' + (S.sections.get(place.section_id)?.name || '') : '') : 'Входящие';
   const whyTask = why ? S.tasks.get(why) : null;
   const has = (f: Feature) => (f === 'due' ? !!due.due_date : f === 'priority' ? priority < 4 : f === 'deadline' ? !!deadline : f === 'labels' ? labels.length > 0
-    : f === 'person' ? !!person : f === 'why' ? !!why : f === 'now' ? !!now : false);
+    : f === 'person' ? !!person : f === 'why' ? !!(why || dir) : f === 'now' ? !!now : false);
   const chips: Record<Feature, () => React.ReactNode> = {
     project: () => null, // проект — внизу слева, не чипом
     due: () => (chip('due', <Icon name="calendar" size={16} style={{ color: due.due_date ? `var(--${dueTone(due.due_date, S.today).slice(0)})` : undefined }} />, dueLabel ? dueLabel + (due.recur ? ' ↻' : '') : null, 'Срок',
@@ -221,9 +257,10 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
     person: () => (chip('ps', <Icon name="user" size={16} />, person ? personName(person) : null, 'Человек',
           (el) => openPop(el, (close) => <PersonPicker value={person} close={close} onPick={(id) => setMan({ ...man, person_id: id })} />),
           () => { cut('person'); setMan({ ...man, person_id: null }); })),
-    why: () => (chip('why', <Icon name="target" size={16} />, whyTask ? whyTask.title : null, 'Зачем',
-          (el) => openPop(el, (close) => <GoalPicker value={why} close={close} onPick={(id) => setMan({ ...man, why_id: id })} />),
-          () => setMan({ ...man, why_id: null }))),
+    why: () => (chip('why', dir && !whyTask ? <DirDot k={dir} size={9} /> : <Icon name="target" size={16} style={whyTask ? { color: 'var(--accent)' } : undefined} />,
+          whyTask ? whyTask.title : dir ? dirShort(dir) : null, 'Дерево жизни',
+          (el) => openPop(el, (close) => <PlacePicker value={{ why_id: why, dir }} close={close} onPick={(v) => { if (pdir) cut('dir'); setMan({ ...man, why_id: v.why_id, dir: v.dir }); }} />),
+          () => { if (pdir) cut('dir'); setMan({ ...man, why_id: null, dir: null }); })),
     now: () => (<button key="now" title="Сейчас" className={'chip' + (now ? ' set' : '')} onClick={() => (parsed.now ? cut('now') : setMan({ ...man, now: !now }))} style={now ? { color: 'var(--accent-text)', borderColor: 'var(--accent)' } : undefined}>
           <Icon name="bolt" size={16} />{now || prefs?.labels_shown !== false ? 'Сейчас' : null}
         </button>),

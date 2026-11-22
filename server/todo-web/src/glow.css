@@ -1,0 +1,319 @@
+/* ══ Свечение по всему /t и дерево жизни (23.11.2026). Владелец: «Todoist, но с таким глоуи дизайном, как мы недавно
+   везде сделали» + «распределение дел по нашему дереву жизни». Основа — та же ночь и вспышки (--fl), что в styles.css и
+   в общем виде Ковчега: цвет несёт свет, обычный текст не светится. Сначала — раскладка новых видов (для обеих тем),
+   потом — свет (только ночью). Подключён после styles.css (main.tsx). ══ */
+
+/* ── Дерево жизни: точка направления, чип в строке, выбор места ── */
+.dir-dot { display: inline-block; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dc, var(--fg3)); vertical-align: middle; }
+.dir-dot.none { background: transparent; border: 1.5px dashed var(--fg3); }
+.dir-m { color: var(--dc); gap: 5px !important; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.dir-m:hover { text-decoration: underline; }
+.place-line { display: inline-flex; align-items: center; gap: 6px; }
+.pp-dirs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 6px 6px 8px; border-bottom: 1px solid var(--div); }
+.pp-dir { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border-radius: 8px; font-size: 12.5px; border: 1px solid var(--border); white-space: nowrap; overflow: hidden; }
+.pp-dir:hover { background: var(--hover); border-color: color-mix(in srgb, var(--dc) 45%, var(--border)); }
+.pp-dir.on { border-color: var(--dc); color: var(--dc); }
+.nav-item.dir .ic { width: 24px; }
+.nav-item.dir.on { background: color-mix(in srgb, var(--dc) 14%, transparent); color: var(--dc); }
+.nav-item.dir.on .cnt { color: var(--dc); }
+.nav-item .cnt.hot { color: var(--d-over); font-weight: 700; }
+.side-gh a.gh-on { color: var(--accent-text); }
+.side-plan { display: flex; align-items: center; gap: 8px; height: 38px; margin: 2px 0 8px; padding: 0 10px; border-radius: 10px; font-weight: 600; font-size: 13.5px;
+  color: var(--accent-text); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.side-plan span { flex: 1; }
+.side-plan:hover, .side-plan.on { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.tm-val .dir-dot { margin: 0 3px; }
+
+/* ── Круг жизни: девять карточек, зоны рядами ── */
+.kr-zone { margin-top: 18px; }
+.kr-zh { font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--fg3); margin: 0 0 8px 2px; }
+.kr-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.kr-card { position: relative; display: flex; flex-direction: column; min-width: 0; padding: 12px 12px 10px; border-radius: 14px; background: var(--raised);
+  border: 1px solid color-mix(in srgb, var(--dc) 22%, var(--border)); transition: border-color .15s, box-shadow .15s, transform .15s; }
+.kr-card:hover { border-color: color-mix(in srgb, var(--dc) 45%, var(--border)); }
+.kr-card.drop { border-color: var(--dc); box-shadow: 0 0 0 2px color-mix(in srgb, var(--dc) 55%, transparent); transform: translateY(-1px); }
+.kr-ch { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; color: var(--fg); }
+.kr-ch:hover .kr-name { text-decoration: underline; }
+.kr-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc); }
+.kr-n { font: 600 18px/1 Literata, Georgia, serif; font-variant-numeric: lining-nums tabular-nums; color: var(--dc); }
+.kr-f { font-size: 12px; line-height: 16px; color: var(--fg3); font-style: italic; margin: 4px 0 2px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.kr-stats { display: flex; gap: 10px; font-size: 11.5px; color: var(--fg2); margin: 4px 0 6px; min-height: 4px; }
+.kr-stats span { display: inline-flex; align-items: center; gap: 4px; }
+.kr-stats .hot { color: var(--d-today); }
+.kr-list { display: flex; flex-direction: column; }
+.kr-t { display: flex; align-items: center; gap: 4px; min-height: 30px; padding: 2px 4px 2px 2px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.kr-t:hover { background: var(--hover); }
+.kr-t .cb { width: 22px; height: 22px; margin: 0; }
+.kr-t .cb i { width: 15px; height: 15px; }
+.kr-tt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kr-due { font-size: 11px; flex: none; }
+.kr-empty { font-size: 12px; color: var(--fg3); padding: 8px 4px; }
+.kr-more { font-size: 12px; color: var(--dc); padding: 4px 4px 0; align-self: flex-start; }
+.kr-more:hover { text-decoration: underline; }
+.kr-loose { margin-top: 26px; }
+.kr-loose .sect-h .dir-dot { margin-right: 2px; }
+.kr-bar-w { margin: 6px 0 4px; }
+.kr-bar { display: flex; gap: 3px; height: 10px; }
+.kr-bar a { flex-basis: 0; min-width: 6px; border-radius: 5px; background: var(--dc); }
+.kr-bar a.none { background: repeating-linear-gradient(135deg, var(--fg3) 0 2px, transparent 2px 5px); }
+.kr-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--fg2); }
+.kr-legend a { display: inline-flex; align-items: center; gap: 5px; }
+.kr-legend a:hover { color: var(--fg); }
+.kr-legend b { color: var(--fg); font-weight: 600; }
+.kr-legend .muted b { color: var(--fg2); }
+
+/* ── Направление и цели ── */
+.gb { margin-top: 6px; }
+.gb-h { display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 4px 6px 4px 2px; border-radius: 10px; cursor: pointer; position: relative; }
+.gb-h:hover { background: var(--hover); }
+.gb-h.drop { box-shadow: inset 0 0 0 2px var(--dc); background: color-mix(in srgb, var(--dc) 10%, transparent); }
+.gb-h .tw { width: 24px; height: 24px; display: grid; place-items: center; color: var(--fg3); border-radius: 6px; }
+.gb-ic { color: var(--dc, var(--accent)); display: inline-grid; place-items: center; }
+.gb-t { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; }
+.gb-rh { font-size: 12px; color: var(--fg2); white-space: nowrap; }
+.gb-n { font-size: 12px; color: var(--fg3); min-width: 16px; text-align: right; }
+.gb-go { opacity: 0; }
+.gb-h:hover .gb-go { opacity: 1; }
+.gb-body { margin-left: 13px; padding-left: 16px; border-left: 1px solid color-mix(in srgb, var(--dc) 35%, var(--div)); }
+.gb.sub > .gb-h .gb-t { font-weight: 500; }
+.gb-projs { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 0 2px; }
+.tree-dir .sect-h { gap: 8px; }
+.tree-dir .sect-h a { color: var(--dc); }
+
+/* ── Строка записи и подсказки дня над «Сейчас» и «Сегодня» ── */
+.capture { display: flex; align-items: center; gap: 10px; width: 100%; height: 46px; padding: 0 8px 0 10px; margin: 0 0 12px; border-radius: 12px; text-align: left;
+  background: var(--raised); border: 1px solid var(--border); color: var(--fg3); font-size: 14.5px; transition: border-color .15s, box-shadow .15s; }
+.capture:hover { border-color: var(--border-h); color: var(--fg2); }
+.capture .plus { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; flex: none; }
+.capture .ph { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.capture .kbd { font-size: 11px; color: var(--fg3); border: 1px solid var(--border); border-radius: 4px; padding: 0 6px; }
+.capture .mic { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; color: var(--fg2); }
+.capture .mic:hover { background: var(--hover); color: var(--accent-text); }
+.nudges { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; margin: 0 0 18px; }
+.nudge { --nc: var(--accent); display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 12px; border-radius: 12px; background: var(--raised);
+  border: 1px solid color-mix(in srgb, var(--nc) 30%, var(--border)); color: var(--fg); }
+.nudge:hover { border-color: color-mix(in srgb, var(--nc) 60%, var(--border)); }
+.nudge > svg:first-child { color: var(--nc); }
+.nudge > svg:last-child { color: var(--fg3); }
+.nudge span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.nudge b { font-weight: 600; font-size: 13.5px; }
+.nudge small { font-size: 11.5px; color: var(--fg3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nudge.n-new { --nc: #7fb2ff; } .nudge.n-owed { --nc: var(--d-over); } .nudge.n-week { --nc: var(--d-week); }
+:root[data-theme="light"] .nudge.n-new { --nc: #2a5d9e; }
+
+/* ── Вкладки (Ждут от меня / Жду / Обсудить) ── */
+.segs { display: inline-flex; gap: 2px; padding: 3px; margin: 4px 0 8px; border-radius: 10px; background: var(--div2); border: 1px solid var(--border); flex-wrap: wrap; }
+.seg { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; color: var(--fg2); }
+.seg:hover { color: var(--fg); }
+.seg.on { background: var(--raised); color: var(--fg); font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, .2); }
+.seg b { font-weight: 600; font-size: 11.5px; color: var(--accent-text); }
+.hot-sect .sect-h { color: var(--d-over); }
+
+/* ── План дня ── */
+.plan { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; max-width: 1100px; }
+.plan-block { margin-bottom: 18px; }
+.plan-bh { display: flex; align-items: center; gap: 7px; font-weight: 700; font-size: 14px; padding: 6px 0; border-bottom: 1px solid var(--div); color: var(--dc, var(--fg)); }
+.plan-bh .n { color: var(--fg3); font-weight: 400; font-size: 12px; }
+.plan-hint { font-size: 12px; color: var(--fg3); margin: 6px 0 2px; }
+.plan-hint.warn { color: var(--d-over); }
+.plan-row { display: flex; gap: 6px; padding: 8px 0 8px 6px; border-bottom: 1px solid var(--div); border-left: 2px solid transparent; transition: border-color .15s, background .15s; }
+.plan-row.picked { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.plan-row .tbody { cursor: pointer; }
+.plan-why { font-size: 12px; margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+.plan-acts { display: flex; gap: 4px; align-items: flex-start; flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
+.pa { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; color: var(--fg2); border: 1px solid var(--border); background: var(--raised); white-space: nowrap; }
+.pa:hover { color: var(--fg); border-color: var(--border-h); }
+.pa.now { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.pa.now.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.pa.ghost { border-color: transparent; background: transparent; padding: 0 6px; }
+.plan-side { position: sticky; top: 64px; }
+.plan-now { padding: 12px; border-radius: 14px; background: var(--raised); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); }
+.plan-now .plan-bh { color: var(--accent-text); }
+.plan-now.over { border-color: var(--d-over); }
+.pn-row { display: flex; align-items: center; gap: 4px; min-height: 34px; border-bottom: 1px solid var(--div); }
+.pn-row .ttl { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.plan-go { width: 100%; justify-content: center; margin-top: 12px; height: 38px; }
+
+/* ── Неделя ── */
+.wk-bars { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 8px; padding: 10px 12px; border-radius: 14px; background: var(--raised); border: 1px solid var(--border); }
+.wk-row { display: grid; grid-template-columns: 130px minmax(0, 1fr) 36px 90px; align-items: center; gap: 10px; height: 28px; font-size: 13px; border-radius: 6px; padding: 0 4px; }
+.wk-row:hover { background: var(--hover); }
+.wk-name { display: flex; align-items: center; gap: 7px; color: var(--dc, var(--fg2)); white-space: nowrap; overflow: hidden; }
+.wk-track { height: 8px; border-radius: 4px; background: var(--div2); overflow: visible; }
+.wk-track i { display: block; height: 100%; border-radius: 4px; background: var(--dc, var(--fg3)); min-width: 0; }
+.wk-n { text-align: right; font: 600 15px/1 Literata, Georgia, serif; font-variant-numeric: lining-nums tabular-nums; color: var(--dc, var(--fg2)); }
+.wk-open { font-size: 11.5px; color: var(--fg3); white-space: nowrap; }
+.wk-row.muted .wk-name { color: var(--fg3); }
+.wk-quiet { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin-top: 8px; }
+.wk-q { padding: 10px 12px; border-radius: 12px; background: var(--raised); border: 1px solid color-mix(in srgb, var(--dc) 25%, var(--border)); display: flex; flex-direction: column; gap: 6px; }
+.wk-qh { display: flex; align-items: center; gap: 7px; font-weight: 600; color: var(--dc); }
+.wk-qt { display: flex; align-items: center; gap: 6px; text-align: left; font-size: 13px; padding: 4px 6px; border-radius: 8px; color: var(--fg); }
+.wk-qt:hover { background: var(--hover); }
+.wk-qt svg { color: var(--accent); flex: none; }
+.wk-add { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--fg3); align-self: flex-start; padding: 2px 6px; border-radius: 6px; }
+.wk-add:hover { color: var(--dc); background: var(--hover); }
+.new-page .bell-g { padding: 0; }
+.new-page .sug { padding: 12px 0; }
+
+@media (max-width: 1100px) { .kr-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .plan { grid-template-columns: 1fr; } .plan-side { position: static; order: -1; } }
+@media (max-width: 750px) {
+  .kr-grid { grid-template-columns: 1fr; gap: 8px; }
+  .kr-card { padding: 10px 10px 8px; }
+  .wk-row { grid-template-columns: 96px minmax(0, 1fr) 28px; }
+  .wk-open { display: none; }
+  .plan-row { flex-wrap: wrap; }
+  .plan-acts { max-width: none; width: 100%; justify-content: flex-start; padding-left: 28px; }
+  .nudges { grid-template-columns: 1fr; }
+  .capture { height: 44px; }
+}
+
+/* ══ Свет (только ночью) ══ */
+:root[data-theme="dark"] {
+  --glass: rgba(26, 24, 21, .965);
+  --glass-line: rgba(255, 228, 196, .09);
+  --sh-glass: 0 30px 80px rgba(0, 0, 0, .55), 0 0 0 1px var(--glass-line), inset 0 1px 0 rgba(255, 240, 220, .05);
+}
+/* Боковая панель — своя полоса света сверху слева (янтарь) и тонкая кромка справа. */
+:root[data-theme="dark"] .side {
+  background: radial-gradient(120% 40% at 0% -6%, rgba(255, 170, 60, .13), transparent 70%), radial-gradient(90% 30% at 100% 102%, rgba(110, 150, 255, .07), transparent 70%), #141310;
+  box-shadow: inset -1px 0 0 rgba(255, 228, 196, .06);
+}
+:root[data-theme="dark"] .nav-item { transition: background .12s, color .12s; }
+:root[data-theme="dark"] .nav-item.on:not(.dir) {
+  background: linear-gradient(90deg, rgba(255, 179, 71, .20), rgba(255, 179, 71, .05) 70%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent), -6px 0 16px -6px color-mix(in srgb, var(--accent) 80%, transparent);
+}
+:root[data-theme="dark"] .nav-item.dir .dir-dot { box-shadow: 0 0 6px var(--dc), 0 0 12px color-mix(in srgb, var(--dc) 45%, transparent); }
+:root[data-theme="dark"] .nav-item.dir:hover { background: linear-gradient(90deg, color-mix(in srgb, var(--dc) 12%, transparent), transparent 80%); }
+:root[data-theme="dark"] .nav-item.dir.on {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--dc) 22%, transparent), color-mix(in srgb, var(--dc) 4%, transparent) 75%, transparent);
+  box-shadow: inset 2px 0 0 var(--dc); text-shadow: var(--fl-text);
+}
+:root[data-theme="dark"] .nav-item .cnt.hot { text-shadow: 0 0 10px color-mix(in srgb, var(--d-over) 70%, transparent); }
+:root[data-theme="dark"] .side-add .plus, :root[data-theme="dark"] .capture .plus { box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent); }
+:root[data-theme="dark"] .side-search { background: rgba(0, 0, 0, .25); border-color: var(--glass-line); }
+:root[data-theme="dark"] .side-plan {
+  background: radial-gradient(120% 140% at 0% 0%, rgba(255, 179, 71, .22), rgba(255, 179, 71, .05) 70%);
+  box-shadow: 0 0 18px -4px rgba(255, 170, 60, .45), inset 0 0 0 1px rgba(255, 190, 110, .25); border-color: transparent; text-shadow: var(--fl-text);
+}
+:root[data-theme="dark"] .side-plan svg { filter: var(--fl-icon); }
+:root[data-theme="dark"] .side-gh a.gh-on { text-shadow: var(--fl-text); }
+/* Разделы и строки — линии, гаснущие к правому краю, вместо сплошных. */
+:root[data-theme="dark"] .sect-h { border-bottom-color: transparent; background-image: linear-gradient(90deg, rgba(255, 210, 160, .16), rgba(255, 210, 160, .05) 60%, transparent);
+  background-size: 100% 1px; background-repeat: no-repeat; background-position: 0 100%; }
+:root[data-theme="dark"] .task { border-bottom-color: transparent; background-image: linear-gradient(90deg, rgba(255, 228, 196, .08), rgba(255, 228, 196, .04) 70%, transparent);
+  background-size: 100% 1px; background-repeat: no-repeat; background-position: 0 100%; }
+:root[data-theme="dark"] .task:not(.focus, .sel):hover {
+  background-image: linear-gradient(90deg, rgba(255, 228, 196, .08), rgba(255, 228, 196, .04) 70%, transparent), radial-gradient(60% 120% at 0% 50%, rgba(255, 190, 110, .08), transparent 70%);
+  background-size: 100% 1px, 100% 100%; background-position: 0 100%, 0 0;
+}
+:root[data-theme="dark"] .cb:hover i { box-shadow: 0 0 8px color-mix(in srgb, currentColor 40%, transparent); }
+:root[data-theme="dark"] .cb.done i { box-shadow: 0 0 10px color-mix(in srgb, var(--ok) 60%, transparent); }
+:root[data-theme="dark"] .dir-dot:not(.none) { box-shadow: 0 0 6px var(--dc), 0 0 12px color-mix(in srgb, var(--dc) 40%, transparent); }
+:root[data-theme="dark"] .dir-m { text-shadow: 0 0 10px color-mix(in srgb, var(--dc) 45%, transparent); }
+:root[data-theme="dark"] .tmeta .m.d-over svg, :root[data-theme="dark"] .tmeta .m.d-today svg { filter: var(--fl-icon); }
+:root[data-theme="dark"] .add-task:hover .plus { box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 60%, transparent); }
+:root[data-theme="dark"] .empty svg { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--accent) 50%, transparent)); }
+/* Окна — тёмное стекло: размытие под ними, тонкая светлая кромка, тень глубже. */
+:root[data-theme="dark"] .scrim { background: rgba(6, 5, 4, .55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+:root[data-theme="dark"] :is(.qa, .tm, .dialog, .search-box) { background: var(--glass); -webkit-backdrop-filter: blur(22px) saturate(1.2); backdrop-filter: blur(22px) saturate(1.2); box-shadow: var(--sh-glass); }
+:root[data-theme="dark"] .qa { box-shadow: var(--sh-glass), 0 0 60px -10px rgba(255, 170, 60, .25); }
+:root[data-theme="dark"] .tm-side { background: rgba(0, 0, 0, .18); border-left-color: var(--glass-line); }
+:root[data-theme="dark"] .pop { background: rgba(29, 27, 24, .95); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); border-color: var(--glass-line); box-shadow: 0 18px 50px rgba(0, 0, 0, .55); }
+:root[data-theme="dark"] .editor { background: rgba(0, 0, 0, .18); border-color: var(--glass-line); }
+:root[data-theme="dark"] .editor:focus-within { border-color: rgba(255, 190, 110, .35); box-shadow: 0 0 0 1px rgba(255, 190, 110, .12), 0 0 24px -6px rgba(255, 170, 60, .35); }
+:root[data-theme="dark"] .qa .editor, :root[data-theme="dark"] .qa .editor:focus-within { background: transparent; box-shadow: none; }
+:root[data-theme="dark"] .chip { background: rgba(255, 240, 220, .03); border-color: var(--glass-line); }
+:root[data-theme="dark"] .chip.set { border-color: rgba(255, 190, 110, .28); }
+/* Строка Claude — светится янтарём, когда в ней пишешь. */
+:root[data-theme="dark"] .claude-bar { background: rgba(27, 25, 22, .9); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); border-color: var(--glass-line); }
+:root[data-theme="dark"] .claude-bar:focus-within { border-color: rgba(255, 190, 110, .4); box-shadow: 0 0 0 1px rgba(255, 190, 110, .15), 0 0 30px -4px rgba(255, 170, 60, .35), var(--sh2); }
+:root[data-theme="dark"] .claude-bar .spark { filter: var(--fl-icon); }
+:root[data-theme="dark"] .claude-bar .send:not(:disabled) { box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent); }
+:root[data-theme="dark"] .claude-feed { background: var(--glass); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); border-color: var(--glass-line); }
+/* Строка записи и подсказки дня. */
+:root[data-theme="dark"] .capture { background: rgba(255, 240, 220, .035); border-color: var(--glass-line); }
+:root[data-theme="dark"] .capture:hover { border-color: rgba(255, 190, 110, .35); box-shadow: 0 0 26px -6px rgba(255, 170, 60, .35); }
+:root[data-theme="dark"] .nudge {
+  background-color: rgba(27, 25, 22, .75);
+  background-image: radial-gradient(90% 120% at 0% 0%, color-mix(in srgb, var(--nc) 16%, transparent), transparent 70%);
+  border-color: color-mix(in srgb, var(--nc) 26%, transparent);
+}
+:root[data-theme="dark"] .nudge:hover { box-shadow: 0 0 22px -6px color-mix(in srgb, var(--nc) 60%, transparent); }
+:root[data-theme="dark"] .nudge > svg:first-child { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--nc) 70%, transparent)); }
+:root[data-theme="dark"] .nudge b { text-shadow: 0 0 14px color-mix(in srgb, var(--nc) 30%, transparent); }
+/* Круг жизни: вспышка цвета направления из угла, имя и число — неоном, при броске — кольцо света. */
+:root[data-theme="dark"] .kr-card {
+  background-color: rgba(27, 25, 22, .78);
+  background-image: radial-gradient(100% 70% at 0% 0%, color-mix(in srgb, var(--dc) 17%, transparent), transparent 70%),
+    radial-gradient(60% 40% at 100% 100%, color-mix(in srgb, var(--dc) 6%, transparent), transparent 70%);
+  border-color: color-mix(in srgb, var(--dc) 20%, transparent);
+}
+:root[data-theme="dark"] .kr-card:hover { box-shadow: 0 0 30px -10px color-mix(in srgb, var(--dc) 55%, transparent); }
+:root[data-theme="dark"] .kr-card.drop { box-shadow: 0 0 0 2px color-mix(in srgb, var(--dc) 70%, transparent), 0 0 40px -6px color-mix(in srgb, var(--dc) 70%, transparent); }
+:root[data-theme="dark"] :is(.kr-name, .kr-n, .wk-n, .wk-qh, .tree-dir .sect-h a) { text-shadow: 0 0 14px color-mix(in srgb, var(--dc) 55%, transparent); }
+:root[data-theme="dark"] .kr-bar a:not(.none) { box-shadow: 0 0 8px color-mix(in srgb, var(--dc) 80%, transparent), 0 0 18px color-mix(in srgb, var(--dc) 35%, transparent); }
+:root[data-theme="dark"] .kr-zh { color: rgba(255, 210, 160, .42); text-shadow: 0 0 12px rgba(255, 170, 60, .25); }
+:root[data-theme="dark"] .gb-ic { filter: drop-shadow(0 0 5px color-mix(in srgb, var(--dc, var(--accent)) 70%, transparent)); }
+:root[data-theme="dark"] .gb-h.drop { box-shadow: inset 0 0 0 2px var(--dc), 0 0 24px -6px var(--dc); }
+:root[data-theme="dark"] .gb-body { border-left-color: color-mix(in srgb, var(--dc) 30%, transparent); box-shadow: -1px 0 8px -4px color-mix(in srgb, var(--dc) 50%, transparent); }
+:root[data-theme="dark"] .dir-page .view-h .vt { text-shadow: 0 0 26px color-mix(in srgb, var(--dc) 40%, transparent); }
+:root[data-theme="dark"] .pp-dir.on { box-shadow: 0 0 12px -2px color-mix(in srgb, var(--dc) 60%, transparent); text-shadow: var(--fl-text); }
+/* Неделя: полосы — неоном своего цвета. */
+:root[data-theme="dark"] .wk-bars, :root[data-theme="dark"] .wk-q { background-color: rgba(27, 25, 22, .78); }
+:root[data-theme="dark"] .wk-q { background-image: radial-gradient(100% 80% at 0% 0%, color-mix(in srgb, var(--dc) 13%, transparent), transparent 70%); }
+:root[data-theme="dark"] .wk-track { background: rgba(255, 240, 220, .05); }
+:root[data-theme="dark"] .wk-track i { box-shadow: 0 0 8px color-mix(in srgb, var(--dc, var(--fg3)) 80%, transparent), 0 0 16px color-mix(in srgb, var(--dc, var(--fg3)) 35%, transparent); }
+/* План дня. */
+:root[data-theme="dark"] .plan-row.picked { background: linear-gradient(90deg, rgba(255, 179, 71, .10), transparent 70%); box-shadow: -4px 0 14px -6px var(--accent); }
+:root[data-theme="dark"] .plan-bh { text-shadow: 0 0 14px color-mix(in srgb, var(--dc, transparent) 45%, transparent); }
+:root[data-theme="dark"] .pa { background: rgba(255, 240, 220, .03); border-color: var(--glass-line); }
+:root[data-theme="dark"] .pa.now.on { box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 55%, transparent); }
+:root[data-theme="dark"] .plan-now {
+  background-color: rgba(27, 25, 22, .82);
+  background-image: radial-gradient(100% 50% at 0% 0%, rgba(255, 179, 71, .16), transparent 70%);
+  box-shadow: 0 0 40px -14px rgba(255, 170, 60, .5); border-color: rgba(255, 190, 110, .28);
+}
+:root[data-theme="dark"] .plan-now.over { box-shadow: 0 0 40px -14px color-mix(in srgb, var(--d-over) 60%, transparent); }
+:root[data-theme="dark"] .segs { background: rgba(0, 0, 0, .25); border-color: var(--glass-line); }
+:root[data-theme="dark"] .seg.on { background: rgba(255, 240, 220, .08); box-shadow: inset 0 0 0 1px rgba(255, 190, 110, .22), 0 0 14px -4px rgba(255, 170, 60, .4); }
+:root[data-theme="dark"] .seg b { text-shadow: var(--fl-text); }
+/* Телефон: нижняя панель — стекло, выбранное светится. */
+@media (max-width: 750px) {
+  :root[data-theme="dark"] .bottom-nav { background: rgba(20, 19, 16, .86); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); border-top-color: var(--glass-line); }
+  :root[data-theme="dark"] .bottom-nav a.on { text-shadow: var(--fl-text); }
+  :root[data-theme="dark"] .bottom-nav a.on svg { filter: var(--fl-icon); }
+  :root[data-theme="dark"] .side { box-shadow: 0 0 60px rgba(0, 0, 0, .6), inset -1px 0 0 rgba(255, 228, 196, .06); }
+}
+
+/* Подгруппы внутри дня (мяч, дерево): мельче и тише заголовка дня. */
+.sect-h.sub-h { font-size: 12.5px; font-weight: 600; color: var(--fg2); padding: 4px 0; }
+
+/* Телефон: подсказки дня — лентой в один ряд, без второй строки (иначе съедают полэкрана над «Сейчас»). */
+@media (max-width: 750px) {
+  .nudges { display: flex; overflow-x: auto; gap: 6px; margin: 0 -16px 14px; padding: 0 16px 2px; scrollbar-width: none; }
+  .nudges::-webkit-scrollbar { display: none; }
+  .nudge { flex: none; max-width: 78vw; padding: 7px 10px; gap: 8px; }
+  .nudge small { display: none; }
+  .nudge b { white-space: nowrap; font-size: 13px; }
+  .nudge > svg:last-child { display: none; }
+}
+.kr-ask { display: flex; flex-wrap: wrap; gap: 4px; }
+.kr-ask .pp-dir { height: 28px; }
+
+/* ── Клиент над задачами проекта (из прежних Дел) ── */
+.client-p { margin: 2px 0 14px; border-radius: 12px; border: 1px solid var(--border); background: var(--raised); }
+.cp-h { display: flex; align-items: center; gap: 6px; width: 100%; height: 38px; padding: 0 10px; font-weight: 600; font-size: 13px; text-align: left; }
+.cp-last { color: var(--fg3); font-weight: 400; font-size: 12px; margin-left: 4px; }
+.cp-crm { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--accent-text); }
+.cp-b { padding: 0 12px 10px 32px; display: flex; flex-direction: column; gap: 6px; }
+.cp-desc { font-size: 13px; color: var(--fg2); white-space: pre-wrap; }
+.cp-people { display: flex; flex-wrap: wrap; gap: 6px; }
+.cp-people .chip { height: 26px; font-size: 12.5px; }
+.cp-tl { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; font-size: 13px; line-height: 18px; }
+.cp-tl b { font-weight: 600; color: var(--fg2); font-size: 12px; }
+.cp-deal { color: var(--fg3); }
+.cp-next { display: block; color: var(--fg3); font-size: 12px; }
+:root[data-theme="dark"] .client-p { background-color: rgba(27, 25, 22, .75); border-color: var(--glass-line);
+  background-image: radial-gradient(80% 120% at 0% 0%, rgba(127, 178, 255, .09), transparent 70%); }

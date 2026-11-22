@@ -9,10 +9,12 @@ import { crmUrl, dealShort, initials, labelColor, personName, projectColor, STAG
 import { recurWords } from '../quick.ts';
 import { op1, S, setTask, syncSoon, useStore } from '../store.ts';
 import type { Task } from '../types.ts';
-import { childrenOf, dirName, goalDir, liveDeals, whyPath } from '../views.ts';
+import { childrenOf, goalDir, liveDeals, whyPath } from '../views.ts';
+import { dirColor, dirShort, mainDir } from '../krug.ts';
+import { PlacePicker, placeTo } from './Krug.tsx';
 import { Icon, PrioFlag } from './icons.tsx';
 import { openPop } from './pop.tsx';
-import { GoalPicker, LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
+import { LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { closeTask, openTask, UI } from './state.ts';
 import { Checkbox } from './TaskRow.tsx';
 import { TaskList } from './TaskList.tsx';
@@ -99,7 +101,7 @@ export function TaskModal() {
   const comments = [...S.comments.values()].filter((c) => c.task_id === t.id && !c.deleted_at).sort((a, b) => a.created_at.localeCompare(b.created_at));
   const kids = childrenOf(t.id);
   const path = whyPath(t);
-  const dir = t.goal ? goalDir(t) : path.length ? goalDir(path[0]) : (t.dirs && t.dirs[0]) || null;
+  const dk = t.goal ? goalDir(t) : mainDir(t);
   const today = S.today;
   const isNow = t.focus_on === today;
 
@@ -315,12 +317,13 @@ export function TaskModal() {
               </div>
             ) : null}
             <div className="tm-row">
-              <div className="tm-lbl">Зачем — место в дереве</div>
-              <button className={'tm-val' + (path.length ? '' : ' muted')} onClick={(e) => openPop(e.currentTarget, (close) => <GoalPicker task={t} value={t.why_id ?? null} close={close} onPick={(id) => setTask(t, { why_id: id }, id ? 'Положил под цель' : 'Убрал из дерева')} />)}>
-                <Icon name="target" size={16} style={{ color: path.length ? 'var(--accent)' : undefined }} />
+              <div className="tm-lbl">Место в дереве жизни</div>
+              <button className={'tm-val' + (path.length || dk ? '' : ' muted')} style={dk ? { '--dc': dirColor(dk) } as React.CSSProperties : undefined}
+                onClick={(e) => openPop(e.currentTarget, (close) => <PlacePicker task={t} value={{ why_id: t.why_id && t.why_goal ? t.why_id : null, dir: null }} close={close} onPick={(v) => placeTo(t, v)} />)}>
+                {dk ? <i className="dir-dot" /> : <Icon name="tree" size={16} />}
                 {path.length ? (
-                  <span className="tm-path">{dir ? dirName(dir) + ' › ' : ''}{path.map((x, i) => <span key={x.id}>{i ? ' › ' : ''}{i === path.length - 1 ? <b>{x.title}</b> : x.title}</span>)}</span>
-                ) : 'Не в дереве'}
+                  <span className="tm-path">{dk ? dirShort(dk) + ' › ' : ''}{path.map((x, i) => <span key={x.id}>{i ? ' › ' : ''}{i === path.length - 1 ? <b>{x.title}</b> : x.title}</span>)}</span>
+                ) : dk ? <span className="tm-path"><b>{dirShort(dk)}</b>{t.project_id && !(t.directions || []).length ? ' — через проект' : ''}</span> : 'Без места — выбрать'}
               </button>
             </div>
             {card?.origin || t.source ? (

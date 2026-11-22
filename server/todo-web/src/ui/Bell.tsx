@@ -7,6 +7,9 @@ import type { Suggestion, Task } from '../types.ts';
 import { isOpen } from '../views.ts';
 import { Icon } from './icons.tsx';
 import { openTask } from './state.ts';
+import { Page } from './Views.tsx';
+import { DirDot } from './Krug.tsx';
+import { dirColor, dirShort } from '../krug.ts';
 
 const AUTO_REASONS = ['закрыто само', 'уточнено само', 'человек заведён сам', 'спикер узнан сам'];
 const SRC: Record<string, string> = { meeting: 'встреча', telegram: 'Telegram', userbot: 'Telegram', phone: 'телефон', bot: 'бот', mcp: 'Claude', user: 'вручную',
@@ -44,14 +47,38 @@ function sugText(s: Suggestion): string {
 }
 
 export function Bell({ close }: { close: () => void }) {
+  return (
+    <div>
+      <div className="bell-h">Новое<span style={{ display: 'flex', gap: 2 }}>
+        <a className="icon-btn sm" href="#/new" title="Открыть страницей" onClick={close}><Icon name="chevR" size={18} /></a>
+        <button className="icon-btn sm" onClick={close}><Icon name="x" size={18} /></button></span></div>
+      <BellBody close={close} />
+    </div>
+  );
+}
+
+/** «Новое» страницей (#/new; ссылки «Разобрать» из Telegram ведут сюда — #/new/<пачка>): то же, что в колокольчике. */
+export function NewView({ batch }: { batch?: string }) {
   useStore();
-  const asks = pending();
+  const n = bellCount();
+  return (
+    <Page title="Новое" icon={<Icon name="bell" size={26} style={{ color: 'var(--accent)' }} />} crumbs="Новое"
+      sub={<span>{n ? `${n} — ждут твоего слова. Остальное автоматика сделала сама: можно вернуть.` : 'Вопросов нет. Ниже — что автоматика сделала сама.'}</span>}>
+      <div className="new-page"><BellBody close={() => {}} batch={batch} /></div>
+    </Page>
+  );
+}
+
+/** Вопросы автоматики, поставленное и сделанное само — общее для колокольчика и страницы. */
+export function BellBody({ close, batch }: { close: () => void; batch?: string }) {
+  useStore();
+  // Пачка из ссылки Telegram — её вопросы первыми.
+  const asks = batch ? [...pending()].sort((a, b) => (b.batch_ref === batch ? 1 : 0) - (a.batch_ref === batch ? 1 : 0)) : pending();
   const done = autoDone();
   const fresh = autoNew();
   const decide = (s: Suggestion, extra: Record<string, unknown>) => ops([{ op: 'suggestion.decide', id: s.id, ...extra }]).catch(() => {});
   return (
     <div>
-      <div className="bell-h">Новое<button className="icon-btn sm" onClick={close}><Icon name="x" size={18} /></button></div>
       {asks.length ? (
         <div className="bell-g">
           <div className="bell-gh"><Icon name="comment" size={14} />Подскажи · {asks.length}</div>
@@ -63,6 +90,25 @@ export function Bell({ close }: { close: () => void }) {
                 {s.payload?.ask && s.payload?.title ? <div className="from">{s.payload.title}</div> : null}
                 <div className="from">{fromLine(s)}</div>
                 {s.quote ? <div className="quote">{s.quote}</div> : null}
+                {s.source === 'krug' && !opts.length && S.dirs.length ? (
+                  // Вопрос разборщика дерева (как в прежнем вебе): все направления кнопками, предложенное — светится;
+                  // выбрал другое — ответ с правкой, её разборщик возьмёт примером на будущее (place.learned).
+                  <div className="btns kr-ask">
+                    {s.payload?.why_id && S.tasks.get(s.payload.why_id) ? (
+                      <button className="btn pri" onClick={() => decide(s, { decision: 'accept' })}>Под цель: {S.tasks.get(s.payload.why_id)!.title}</button>
+                    ) : null}
+                    {S.dirs.map((d) => {
+                      const sug = ((s.payload?.directions as string[]) || []).includes(d.key) && !s.payload?.why_id;
+                      return (
+                        <button key={d.key} className={'pp-dir' + (sug ? ' on' : '')} style={{ '--dc': dirColor(d.key) } as React.CSSProperties}
+                          onClick={() => decide(s, sug && ((s.payload?.directions as string[]) || []).length === 1 ? { decision: 'accept' } : { decision: 'accept', set: { directions: [d.key], why_id: null } })}>
+                          <DirDot k={d.key} />{dirShort(d.key)}
+                        </button>
+                      );
+                    })}
+                    <button className="btn sec" onClick={() => decide(s, { decision: 'reject' })}>Не надо</button>
+                  </div>
+                ) : (
                 <div className="btns">
                   {opts.length ? opts.map((o, i) => <button key={i} className={'btn ' + (i === 0 ? 'pri' : 'sec')} onClick={() => decide(s, { option: i })}>{o.label}</button>) : (
                     <>
@@ -71,6 +117,7 @@ export function Bell({ close }: { close: () => void }) {
                     </>
                   )}
                 </div>
+                )}
               </div>
             );
           })}

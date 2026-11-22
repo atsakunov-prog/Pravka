@@ -170,4 +170,6 @@ export interface TodoSettings {
   porder?: Id[];             // порядок проектов в боковой панели
   collapsed?: Record<string, boolean>;
   layout?: Record<string, 'list' | 'board'>;
+  planned?: string;          // «План дня» сделан в этот день (23.11.2026)
+  reviewed?: string;         // «Неделя» разобрана в этот день
 }

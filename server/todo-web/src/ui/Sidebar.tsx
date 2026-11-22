@@ -5,20 +5,29 @@ import { setDue, setPlace } from './acts.ts';
 import { useEffect, useState } from 'react';
 import { dealShort, go, initials, projectColor, useRoute } from '../lib.ts';
 import { S, saveTodo, setTask, todoSettings, useStore } from '../store.ts';
-import { counts, dirName, goalChildren, liveDeals, projectsSorted } from '../views.ts';
+import { counts, liveDeals, projectsSorted } from '../views.ts';
+import { dirColor, dirShort, dirTasks, krugOn, unplaced } from '../krug.ts';
+import { DirDot, setDir } from './Krug.tsx';
+import { ballCounts } from './Ball.tsx';
+import { planDone } from './Plan.tsx';
 import { Bell, bellCount } from './Bell.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { openDialog, openDictate, openQuick, toggleSide, UI } from './state.ts';
 import { draggingId } from './TaskList.tsx';
 
-function Item({ href, icon, label, count, on, sub, onDropTask, tw }: {
+function Item({ href, icon, label, count, on, sub, onDropTask, tw, dc, hot }: {
   href: string; icon: React.ReactNode; label: string; count?: number; on?: boolean; sub?: number;
   onDropTask?: (id: string) => void; tw?: React.ReactNode;
+  /** Цвет направления дерева жизни — свечение пункта. */
+  dc?: string;
+  /** Число горит (ждут от меня, план дня не сделан). */
+  hot?: boolean;
 }) {
   const [over, setOver] = useState(false);
   return (
-    <a href={href} className={'nav-item' + (on ? ' on' : '') + (sub === 1 ? ' sub' : sub === 2 ? ' sub2' : '') + (over ? ' drop' : '')}
+    <a href={href} className={'nav-item' + (on ? ' on' : '') + (sub === 1 ? ' sub' : sub === 2 ? ' sub2' : '') + (over ? ' drop' : '') + (dc ? ' dir' : '')}
+      style={dc ? { '--dc': dc } as React.CSSProperties : undefined}
       onClick={() => { if (UI.sideMobile) { UI.sideMobile = false; } }}
       onDragOver={onDropTask ? (e) => { if (draggingId()) { e.preventDefault(); setOver(true); } } : undefined}
       onDragLeave={() => setOver(false)}
@@ -26,7 +35,7 @@ function Item({ href, icon, label, count, on, sub, onDropTask, tw }: {
       {tw}
       <span className="ic">{icon}</span>
       <span className="lbl">{label}</span>
-      {count ? <span className="cnt">{count}</span> : null}
+      {count ? <span className={'cnt' + (hot ? ' hot' : '')}>{count}</span> : null}
     </a>
   );
 }
@@ -53,6 +62,7 @@ export function SideContent() {
     return null;
   }).filter(Boolean);
   const dirs = S.dirs.length ? S.dirs : [];
+  const b = ballCounts();
   return (
     <>
       <div className="side-top">
@@ -68,10 +78,15 @@ export function SideContent() {
         <button className="side-add" onClick={() => openQuick()}><span className="plus"><Icon name="plus" size={16} sw={2} /></span>Добавить задачу</button>
         <button className="side-add dict" onClick={() => openDictate()}><span className="plus"><Icon name="mic" size={16} sw={2} /></span>Надиктовать задачи</button>
         <SideSearch />
+        {!planDone() ? (
+          <a href="#/plan" className={'side-plan' + (at('plan') ? ' on' : '')}><Icon name="sun" size={18} /><span>Спланировать день</span><Icon name="chevR" size={16} /></a>
+        ) : null}
         <Item href="#/now" icon={<Icon name="bolt" size={20} />} label="Сейчас" count={c.now} on={at('now') || r.view === ''} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setTask(t, { focus_on: S.today }, 'В «Сейчас»').catch(() => {}); }} />
         <Item href="#/inbox" icon={<Icon name="inbox" size={20} />} label="Входящие" count={c.inbox} on={at('inbox')} onDropTask={move(null)} />
         <Item href="#/today" icon={<TodayIcon day={+(S.today || '00').slice(8, 10)} size={20} />} label="Сегодня" count={c.today} on={at('today')} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setDue(t, { due_date: S.today }); }} />
         <Item href="#/upcoming" icon={<Icon name="upcoming" size={20} />} label="Предстоящее" on={at('upcoming')} />
+        <Item href="#/ball/owed" icon={<Icon name="arrowUp" size={20} />} label="Ждут от меня" count={b.owed} hot={b.owed > 0} on={at('ball', 'owed')} />
+        <Item href="#/ball/waiting" icon={<Icon name="users" size={20} />} label="Жду от других" count={b.waiting} hot={b.nudge > 0} on={at('ball', 'waiting')} />
         <Item href="#/filters" icon={<Icon name="filters" size={20} />} label="Фильтры и метки" on={at('filters') || at('filter') || at('label')} />
         <Item href="#/done" icon={<Icon name="done" size={20} />} label="Выполнено" on={at('done')} />
 
@@ -79,6 +94,24 @@ export function SideContent() {
           <div className="side-group">
             <div className="side-gh" onClick={() => toggle('fav')}>Избранное<Icon name={coll.fav ? 'chevR' : 'chevD'} size={16} /></div>
             {coll.fav ? null : favItems}
+          </div>
+        ) : null}
+
+        {krugOn() ? (
+          <div className="side-group">
+            <div className="side-gh">
+              <a href="#/krug" style={{ flex: 1 }} className={at('krug') || at('tree') ? 'gh-on' : ''}>Дерево жизни</a>
+              <span className="acts"><button className="icon-btn sm" onClick={() => toggle('tree')}><Icon name={coll.tree ? 'chevR' : 'chevD'} size={16} /></button></span>
+            </div>
+            {coll.tree ? null : (
+              <>
+                {dirs.map((d) => (
+                  <Item key={d.key} href={'#/dir/' + d.key} icon={<DirDot k={d.key} size={9} />} label={dirShort(d.key)} count={dirTasks(d.key).length}
+                    on={at('dir', d.key)} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setDir(t, d.key); }} dc={dirColor(d.key)} />
+                ))}
+                {unplaced().length ? <Item href="#/dir/none" icon={<i className="dir-dot none" />} label="Без места" count={unplaced().length} on={at('dir', 'none')} /> : null}
+              </>
+            )}
           </div>
         ) : null}
 
@@ -108,25 +141,14 @@ export function SideContent() {
             );
           })}
         </div>
-        {dirs.length ? (
-          <div className="side-group">
-            <div className="side-gh">
-              <a href="#/tree" style={{ flex: 1 }}>Дерево жизни</a>
-              <span className="acts"><button className="icon-btn sm" onClick={() => toggle('tree')}><Icon name={coll.tree ? 'chevR' : 'chevD'} size={16} /></button></span>
-            </div>
-            {coll.tree ? null : dirs.map((d) => {
-              const n = goalChildren(null, d.key).length;
-              return n ? <Item key={d.key} href={'#/dir/' + d.key} icon={<Icon name="target" size={18} style={{ color: 'var(--accent)' }} />} label={dirName(d.key)} count={n} on={at('dir', d.key)} /> : null;
-            })}
-          </div>
-        ) : null}
-
       </div>
       <div className="side-foot">
         <a href="/#/crm" target="_blank" rel="noreferrer">Воронка ↗</a>
         <a href="/#/clients" target="_blank" rel="noreferrer">Клиенты ↗</a>
         <a href="/#/people" target="_blank" rel="noreferrer">Люди ↗</a>
-        <a href="/" title="Прежний веб Дел">Старые Дела</a>
+        <a href="#/new">Новое</a>
+        <a href="#/week">Неделя</a>
+        <a href="/?old=1" onClick={() => { try { sessionStorage.setItem('dela.old', '1'); } catch { /* */ } }} title="Прежний веб Дел">Старые Дела</a>
       </div>
     </>
   );

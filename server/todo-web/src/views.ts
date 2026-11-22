@@ -92,8 +92,12 @@ export function underGoal(t: Task): boolean {
   return false;
 }
 
+/** Место в дереве уже есть: под целью или своё направление (поставил сам или разборщик) — во «Входящих» его нет
+ *  (23.11.2026: «Входящие» — только неразобранное). */
+export const placed = (t: Task): boolean => underGoal(t) || (t.directions || []).length > 0;
+
 export function inbox(): Task[] {
-  return sorted(listed().filter((t) => !t.project_id && mine(t) && !underGoal(t)), 'project');
+  return sorted(listed().filter((t) => !t.project_id && mine(t) && !placed(t)), 'project');
 }
 
 export function nowList(): Task[] {
@@ -175,7 +179,7 @@ export function counts(): { inbox: number; today: number; now: number; byProject
   for (const t of S.tasks.values()) {
     if (!isListed(t)) continue;
     const me = mine(t);
-    if (!t.project_id && me && !underGoal(t)) inboxN++;
+    if (!t.project_id && me && !placed(t)) inboxN++;
     if (me && t.due_date && t.due_date <= S.today) todayN++;
     if (me && t.focus_on === S.today) nowN++;
     if (t.deal_id) byDeal.set(t.deal_id, (byDeal.get(t.deal_id) || 0) + 1);

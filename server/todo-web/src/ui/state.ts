@@ -9,6 +9,7 @@ export interface QuickDefaults {
   due_date?: string | null;
   focus_on?: string | null;
   why_id?: Id | null;
+  directions?: string[]; // направление дерева жизни без цели (вид направления, «~Здоровье» в строке)
   labels?: string[];
   person_id?: Id | null;
   priority?: number;

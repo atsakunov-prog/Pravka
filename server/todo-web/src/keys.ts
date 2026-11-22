@@ -55,4 +55,6 @@ export const OPEN: Record<string, string> = { p: 'prod' };
 
 export const GO: Record<string, string> = {
   i: 'inbox', t: 'today', u: 'upcoming', v: 'filters', c: 'done', d: 'done', n: 'now', h: 'now',
+  // свои (23.11.2026): G K — «Круг жизни», G P — «План дня», G W — «Неделя», G B — «Жду от других», G O — «Ждут от меня»
+  k: 'krug', p: 'plan', w: 'week', b: 'ball/waiting', o: 'ball/owed',
 };

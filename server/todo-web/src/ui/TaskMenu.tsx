@@ -7,9 +7,10 @@ import { dueOptions } from '../schedule.ts';
 import { crmUrl, taskLink } from '../lib.ts';
 import { op1, ops, S, setTask, toast } from '../store.ts';
 import type { Task } from '../types.ts';
+import { PlacePicker, placeTo } from './Krug.tsx';
 import { Icon, PrioFlag } from './icons.tsx';
 import { closePop, openPop } from './pop.tsx';
-import { GoalPicker, LabelPicker, PersonPicker, postponeTasks, ProjectPicker, QUICK_LOOK, quickHint, Scheduler } from './pickers.tsx';
+import { LabelPicker, PersonPicker, postponeTasks, ProjectPicker, QUICK_LOOK, quickHint, Scheduler } from './pickers.tsx';
 import { openQuick, openTask } from './state.ts';
 import { setDeadline, setDue, setPlace } from './acts.ts';
 import { T } from '../toastText.ts';
@@ -88,7 +89,7 @@ export function TaskMenu({ t, close }: { t: Task; close: () => void }) {
       <button className="mi" onClick={() => sub((c) => <RemindPicker t={t} close={c} />)}><Icon name="alarm" size={18} />Напоминание</button>
       <button className="mi" onClick={() => sub(() => <LabelPicker value={t.labels || []} onPick={(l) => setTask(t, { labels: l })} />)}><Icon name="tag" size={18} />Метки<span className="r">L</span></button>
       <button className="mi" onClick={() => sub((c) => <PersonPicker value={t.person_id} close={c} onPick={(id) => setTask(t, { person_id: id })} />)}><Icon name="user" size={18} />Человек</button>
-      <button className="mi" onClick={() => sub((c) => <GoalPicker task={t} value={t.why_id ?? null} close={c} onPick={(id) => setTask(t, { why_id: id }, id ? 'Положил под цель' : 'Убрал из дерева')} />)}><Icon name="target" size={18} />Зачем (цель)</button>
+      <button className="mi" onClick={() => sub((c) => <PlacePicker task={t} value={{ why_id: t.why_id && t.why_goal ? t.why_id : null, dir: null }} close={c} onPick={(v) => placeTo(t, v)} />)}><Icon name="tree" size={18} />Место в дереве жизни</button>
       <button className="mi" onClick={() => { close(); openQuick({ project_id: t.project_id, deal_id: t.deal_id, why_id: t.id }); }}><Icon name="sub" size={18} />Добавить подзадачу</button>
       <div className="msep" />
       <button className="mi" onClick={() => sub((c) => <ProjectPicker value={{ project_id: t.project_id, deal_id: t.deal_id, section_id: t.section_id ?? null }} close={c}

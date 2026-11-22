@@ -21,7 +21,7 @@
 import { addDays, addMonths, daysInMonth, mondayOf, nextWeekday, weekday, ymd } from './dates.ts';
 import type { Recur } from './types.ts';
 
-export type TokKind = 'date' | 'project' | 'section' | 'label' | 'priority' | 'person' | 'deadline' | 'desc' | 'now' | 'remind';
+export type TokKind = 'date' | 'project' | 'section' | 'label' | 'priority' | 'person' | 'deadline' | 'desc' | 'now' | 'remind' | 'dir';
 
 export interface Tok {
   start: number;

@@ -1218,6 +1218,27 @@ function renderLogin(msg) {
   pw.focus();
 }
 
+// Главный вид Дел — /t (23.11.2026, владелец: «вид, как в Тудуисте, давай оставим как основной», «всё, что сейчас есть,
+// любое представление неправильное»). Владельцу виды дел прежнего веба (Сейчас, Сегодня, Новое, Все, Круг, Дерево,
+// ссылка на дело и «Разобрать» из Telegram) открываются в /t тем же адресом; CRM, встречи, настройки, страницы телефона —
+// здесь, как были. «Старые Дела» из /t (/?old=1) — прежний веб до конца вкладки (sessionStorage). Команде — как было.
+function toTodo() {
+  if (!S.me || S.me.role !== 'owner') return null;
+  try {
+    if (new URLSearchParams(location.search).get('old') === '1') { sessionStorage.setItem('dela.old', '1'); return null; }
+    if (sessionStorage.getItem('dela.old') === '1') return null;
+  } catch (e) { /* без хранилища — как обычно */ }
+  const h = location.hash.replace(/^#\/?/, '');
+  const [kind, ...rest] = h.split('/');
+  const id = rest.join('/');
+  const map = { '': 'now', now: 'now', today: 'today', all: 'krug', krug: 'krug', tree: 'tree', inbox: 'inbox', week: 'week' };
+  if (kind in map) return '/t#/' + map[kind];
+  if (kind === 'new') return '/t#/new' + (id ? '/' + id : '');
+  if (kind === 'task' && /^\d+$/.test(id)) return '/t#/task/' + id;
+  if (kind === 'search') return '/t#/search/' + id;
+  return null;
+}
+
 async function boot() {
   const m = location.hash.match(/invite=([\w-]+)/);
   if (m) {
@@ -1228,6 +1249,8 @@ async function boot() {
     }
   }
   if (!S.me) { try { S.me = await api('/api/me'); } catch (e) { return; } }
+  const toT = toTodo();
+  if (toT) { location.replace(toT); return; }
   rememberLook();
   await sync(true);
   render();

@@ -6,7 +6,8 @@ import { deadlineWords, diffDays, dueWords, dueTone, nowHm } from '../dates.ts';
 import { cls, dealShort, labelColor, personName, projectColor } from '../lib.ts';
 import { completeSoon, ops, S, ticking } from '../store.ts';
 import type { Task } from '../types.ts';
-import { childrenOf, commentCount } from '../views.ts';
+import { childrenOf, commentCount, placed } from '../views.ts';
+import { dirColor, dirShort, mainDir } from '../krug.ts';
 import { Icon } from './icons.tsx';
 import { openPop } from './pop.tsx';
 import { Scheduler } from './pickers.tsx';
@@ -29,6 +30,8 @@ export interface RowOpts {
   selected?: boolean;
   onSelect?: (t: Task, e: React.MouseEvent) => void;
   hideDate?: boolean;
+  /** Не показывать направление дерева жизни (вид самого направления или цели). */
+  hideDir?: boolean;
 }
 
 export function Checkbox({ t, onDone }: { t: Task; onDone?: () => void }) {
@@ -50,7 +53,7 @@ export function Checkbox({ t, onDone }: { t: Task; onDone?: () => void }) {
   );
 }
 
-export function Meta({ t, showProject, hideDate }: { t: Task; showProject?: boolean; hideDate?: boolean }) {
+export function Meta({ t, showProject, hideDate, hideDir }: { t: Task; showProject?: boolean; hideDate?: boolean; hideDir?: boolean }) {
   const today = S.today;
   const kids = childrenOf(t.id);
   const kidsDone = kids.filter((k) => k.status === 'done').length;
@@ -86,8 +89,19 @@ export function Meta({ t, showProject, hideDate }: { t: Task; showProject?: bool
     if (t.ball === 'waiting' && t.nudge_on && t.nudge_on <= today) items.push(<span key="n" className="m d-over"><Icon name="bell" size={12} />пнуть</span>);
   }
   for (const l of t.labels || []) items.push(<span key={'l' + l} className="m lbl-chip" style={{ color: labelColor(l) }}><Icon name="tag" size={12} />{l}</span>);
-  if (t.why_id && t.why_goal && t.why_title) items.push(<span key="w" className="m" title="Зачем"><Icon name="target" size={12} />{t.why_title}</span>);
-  if (showProject) {
+  // Место в дереве жизни (23.11.2026): направление — светящейся точкой своего цвета, цель — рядом. В виде направления
+  // или цели не повторяется (hideDir).
+  // В проекте направление у всех одно (проекта) — там только цель, если задача висит на своей.
+  const dk = hideDir || (!showProject && t.project_id) ? null : mainDir(t);
+  if (dk) {
+    items.push(
+      <a key="dir" className="m dir-m" href={'#/dir/' + dk} onClick={(e) => e.stopPropagation()} style={{ '--dc': dirColor(dk) } as React.CSSProperties} title="Направление в дереве жизни">
+        <i className="dir-dot" />{t.why_id && t.why_goal && t.why_title ? t.why_title : dirShort(dk)}
+      </a>,
+    );
+  } else if (t.why_id && t.why_goal && t.why_title && !hideDir) items.push(<span key="w" className="m" title="Зачем"><Icon name="target" size={12} />{t.why_title}</span>);
+  // Без проекта, но с местом в дереве — не «Входящие» (их там нет): место уже сказал чип направления.
+  if (showProject && (proj || !placed(t))) {
     const where = t.deal_id ? `${proj?.name || ''} / ${dealShort(t.deal_id)}` : proj ? proj.name + (t.section_name ? ' / ' + t.section_name : '') : 'Входящие';
     items.push(
       <span key="pr" className="m where">
@@ -164,7 +178,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
       <div className="tbody">
         <div className="ttl">{t.title}</div>
         {t.notes ? <div className="tdesc">{t.notes.split('\n')[0]}</div> : null}
-        <Meta t={t} showProject={opts.showProject} hideDate={opts.hideDate} />
+        <Meta t={t} showProject={opts.showProject} hideDate={opts.hideDate} hideDir={opts.hideDir} />
       </div>
       {t.status === 'open' ? (
         <div className="tacts d-only" onClick={(e) => e.stopPropagation()}>

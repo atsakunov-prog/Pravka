@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { inApp } from './api.ts';
 import { applyLook, watchLook } from './look.ts';
 import './styles.css';
+import './glow.css';
 import { App } from './ui/App.tsx';
 
 // Тема — look.ts (16.11.2026: «Ночь» по умолчанию). KV.setTheme зовёт приложение Правки (ServiceWeb.themeScript), когда

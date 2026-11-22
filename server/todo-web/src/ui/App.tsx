@@ -24,9 +24,14 @@ import { closeDialog, closeQuick, closeTask, openDialog, openDictate, openQuick,
 import { TaskModal } from './TaskModal.tsx';
 import { Checkbox, Meta } from './TaskRow.tsx';
 import {
-  DealView, DoneView, FilterDialog, FiltersPage, FilterView, GoalView, InboxView, LabelView, NowView, Page, PersonView, ProjectView, SearchView,
-  TodayView, TreeView, UpcomingView,
+  DealView, DoneView, FilterDialog, FiltersPage, FilterView, InboxView, LabelView, NowView, Page, PersonView, ProjectView, SearchView,
+  TodayView, UpcomingView,
 } from './Views.tsx';
+import { DirView, GoalView, KrugView, TreeView } from './Krug.tsx';
+import { BallView } from './Ball.tsx';
+import { NewView } from './Bell.tsx';
+import { PlanView } from './Plan.tsx';
+import { WeekView } from './Week.tsx';
 
 function Toasts() {
   useStore();
@@ -164,8 +169,13 @@ function Body() {
     case 'filter': return <FilterView id={id!} key={id} />;
     case 'filters': return <FiltersPage />;
     case 'person': return <PersonView id={id!} key={id} />;
+    case 'krug': return <KrugView />;
+    case 'plan': return <PlanView />;
+    case 'week': return <WeekView />;
+    case 'ball': return <BallView kind={id || 'owed'} key={id} />;
+    case 'new': return <NewView batch={id} key={id || 'new'} />;
     case 'tree': return <TreeView />;
-    case 'dir': return <TreeView dir={id} key={id} />;
+    case 'dir': return <DirView dir={id || 'none'} key={id} />;
     case 'goal': return <GoalView id={id!} key={id} />;
     case 'done': return <DoneView />;
     case 'browse': return <BrowseView />;
@@ -356,9 +366,10 @@ export function App() {
       <ClaudeBar />
       <nav className="bottom-nav">
         {tab('now', <Icon name="bolt" size={22} />, 'Сейчас')}
-        {tab('inbox', <Icon name="inbox" size={22} />, 'Входящие')}
         {tab('today', <TodayIcon day={+S.today.slice(8, 10)} size={22} />, 'Сегодня')}
-        {tab('upcoming', <Icon name="upcoming" size={22} />, 'Предстоящее')}
+        {/* Дерево жизни — на телефоне под рукой (23.11.2026); «Предстоящее» — в «Обзоре» */}
+        {S.dirs.length ? tab('krug', <Icon name="tree" size={22} />, 'Круг') : tab('upcoming', <Icon name="upcoming" size={22} />, 'Предстоящее')}
+        {tab('inbox', <Icon name="inbox" size={22} />, 'Входящие')}
         {tab('browse', <Icon name="menu" size={22} />, 'Обзор')}
       </nav>
       <button className="fab" onClick={() => openQuick(defaultsFor())} aria-label="Добавить задачу"><Icon name="plus" size={28} sw={2} /></button>
