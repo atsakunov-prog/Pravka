@@ -28,7 +28,7 @@ import { Checkbox, Meta } from './TaskRow.tsx';
 import { openTask } from './state.ts';
 import { DayStrip } from './DayStrip.tsx';
 import { bellCount } from './Bell.tsx';
-import { planDone } from './Plan.tsx';
+import { isEvening, planDone } from './Plan.tsx';
 import { reviewDue } from './Week.tsx';
 import { ballCounts } from './Ball.tsx';
 
@@ -40,7 +40,9 @@ function DayTop({ add }: { add: Record<string, unknown> }) {
   const n = bellCount();
   const owed = ballCounts().owed;
   const cards: ReactNode[] = [];
-  if (!planDone()) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="sun" size={18} /><span><b>Спланировать день</b><small>что горит и что двигает жизнь — за пару минут</small></span><Icon name="chevR" size={16} /></a>);
+  const nowLeft = nowList().length;
+  if (isEvening() && nowLeft) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="moon" size={18} /><span><b>Итог дня</b><small>{nowLeft} в «Сейчас» — сделать или на завтра</small></span><Icon name="chevR" size={16} /></a>);
+  else if (!planDone()) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="sun" size={18} /><span><b>Спланировать день</b><small>что горит и что двигает жизнь — за пару минут</small></span><Icon name="chevR" size={16} /></a>);
   if (n) cards.push(<a key="new" className="nudge n-new" href="#/new"><Icon name="bell" size={18} /><span><b>Новое: {plural(n, 'вопрос', 'вопроса', 'вопросов')}</b><small>из встреч и переписки — ждут твоего слова</small></span><Icon name="chevR" size={16} /></a>);
   if (owed) cards.push(<a key="owed" className="nudge n-owed" href="#/ball/owed"><Icon name="arrowUp" size={18} /><span><b>Ждут от меня: {owed}</b><small>люди ждут — отбить первым</small></span><Icon name="chevR" size={16} /></a>);
   if (reviewDue() && new Date().getDay() % 6 === 0) cards.push(<a key="week" className="nudge n-week" href="#/week"><Icon name="upcoming" size={18} /><span><b>Обзор недели</b><small>куда ушла неделя по дереву жизни</small></span><Icon name="chevR" size={16} /></a>);

@@ -4,12 +4,12 @@ import { applyLook, lookChoice } from '../look.ts';
 import { setDue, setPlace } from './acts.ts';
 import { useEffect, useState } from 'react';
 import { dealShort, go, initials, projectColor, useRoute } from '../lib.ts';
-import { S, saveTodo, setTask, todoSettings, useStore } from '../store.ts';
+import { emit, S, saveTodo, setTask, todoSettings, useStore } from '../store.ts';
 import { counts, liveDeals, projectsSorted } from '../views.ts';
 import { dirColor, dirShort, dirTasks, krugOn, unplaced } from '../krug.ts';
 import { DirDot, setDir } from './Krug.tsx';
 import { ballCounts } from './Ball.tsx';
-import { planDone } from './Plan.tsx';
+import { isEvening, planDone } from './Plan.tsx';
 import { Bell, bellCount } from './Bell.tsx';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
@@ -78,7 +78,9 @@ export function SideContent() {
         <button className="side-add" onClick={() => openQuick()}><span className="plus"><Icon name="plus" size={16} sw={2} /></span>Добавить задачу</button>
         <button className="side-add dict" onClick={() => openDictate()}><span className="plus"><Icon name="mic" size={16} sw={2} /></span>Надиктовать задачи</button>
         <SideSearch />
-        {!planDone() ? (
+        {isEvening() && c.now ? (
+          <a href="#/plan" className={'side-plan' + (at('plan') ? ' on' : '')}><Icon name="moon" size={18} /><span>Итог дня</span><Icon name="chevR" size={16} /></a>
+        ) : !planDone() ? (
           <a href="#/plan" className={'side-plan' + (at('plan') ? ' on' : '')}><Icon name="sun" size={18} /><span>Спланировать день</span><Icon name="chevR" size={16} /></a>
         ) : null}
         <Item href="#/now" icon={<Icon name="bolt" size={20} />} label="Сейчас" count={c.now} on={at('now') || r.view === ''} onDropTask={(id) => { const t = S.tasks.get(id); if (t) setTask(t, { focus_on: S.today }, 'В «Сейчас»').catch(() => {}); }} />
@@ -185,6 +187,7 @@ function MeMenu({ close }: { close: () => void }) {
   const theme = (t: string) => {
     try { localStorage.setItem('todo.look', t); } catch { /* */ }
     applyLook();
+    emit(); // цвета направлений дерева у ночи и дня разные — перерисовать
     close();
   };
   const accent = (a: string) => {

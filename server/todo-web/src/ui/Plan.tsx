@@ -3,12 +3,12 @@
 // направления дерева жизни — то, что двигает жизнь и чего никто не ждёт. Каждой — одно решение: в «Сейчас», завтра,
 // без срока или «не буду». Справа — «Сейчас» дня (до пяти, как решил владелец 06.10). «Готово» — день спланирован,
 // кнопка в боковой панели гаснет до завтра.
-import { addDays, plural } from '../dates.ts';
+import { addDays, nowHm, plural } from '../dates.ts';
 import { dirColor, dirShort, dirTasks, krugOn, mainDir } from '../krug.ts';
 import { go } from '../lib.ts';
 import { ops, S, saveTodo, setTask, toast, todoSettings, useStore } from '../store.ts';
 import type { Task } from '../types.ts';
-import { dayList, listed, mine, nowList, overdue, smart } from '../views.ts';
+import { completedRecent, dayList, listed, mine, nowList, overdue, smart } from '../views.ts';
 import { setDue } from './acts.ts';
 import { Icon } from './icons.tsx';
 import { DirDot } from './Krug.tsx';
@@ -19,6 +19,11 @@ import { Page } from './Views.tsx';
 const NOW_MAX = 5;
 
 export const planDone = () => todoSettings().planned === S.today;
+/** Вечер — с 17:00: «План дня» становится «Итогом дня» (как shutdown у Sunsama): что сделано и несделанное — на завтра. */
+export const isEvening = () => nowHm() >= '17:00';
+/** Сделано сегодня (по Москве) — своё. */
+export const doneToday = () => completedRecent(1).filter((t) => mine(t) && t.completed_at
+  && new Date(t.completed_at).toLocaleString('sv', { timeZone: 'Europe/Moscow' }).slice(0, 10) === S.today);
 
 export function PlanRow({ t, why }: { t: Task; why?: React.ReactNode }) {
   const isNow = t.focus_on === S.today;
@@ -73,9 +78,20 @@ export function PlanView() {
     .filter((t): t is Task => !!t)) : [];
   const total = over.length + owed.length + today.length + nudge.length;
   const done = () => saveTodo({ planned: S.today }).then(() => { toast('День спланирован'); go('now'); }).catch(() => {});
+  const evening = isEvening();
+  const did = doneToday();
+  const tomorrow = addDays(S.today, 1);
+  const leftNow = now.filter((t) => t.status === 'open');
+  const toTomorrow = () => {
+    const back = leftNow.map((t) => ({ op: 'task.set', id: t.id, set: { focus_on: t.focus_on ?? null } }));
+    ops(leftNow.map((t) => ({ op: 'task.set', id: t.id, set: { focus_on: tomorrow } })))
+      .then(() => toast('На завтра в «Сейчас»: ' + plural(leftNow.length, 'задача', 'задачи', 'задач'), () => ops(back).catch(() => {}))).catch(() => {});
+  };
   return (
-    <Page title="План дня" icon={<Icon name="sun" size={26} style={{ color: 'var(--accent)' }} />} crumbs="План дня" wide
-      sub={<span>{total ? `Горит ${plural(total, 'задача', 'задачи', 'задач')}. Каждой — одно решение: «Сейчас», завтра, без срока или не буду.` : 'Ничего не горит — выбери, что двигает жизнь.'}</span>}>
+    <Page title={evening ? 'Итог дня' : 'План дня'} icon={<Icon name={evening ? 'moon' : 'sun'} size={26} style={{ color: 'var(--accent)' }} />} crumbs={evening ? 'Итог дня' : 'План дня'} wide
+      sub={<span>{evening
+        ? `Сегодня сделано: ${plural(did.length, 'задача', 'задачи', 'задач')}. Несделанное из «Сейчас» — на завтра, горящее — решить.`
+        : total ? `Горит ${plural(total, 'задача', 'задачи', 'задач')}. Каждой — одно решение: «Сейчас», завтра, без срока или не буду.` : 'Ничего не горит — выбери, что двигает жизнь.'}</span>}>
       <div className="plan">
         <div className="plan-main">
           <Block title="Просрочено" icon="calendar" tasks={over} tone="var(--d-over)" hint="Честно: сделать сегодня, перенести или отпустить." />
@@ -98,8 +114,17 @@ export function PlanView() {
             ))}
             {!now.length ? <div className="plan-hint">Возьми слева до пяти задач — это и есть твой день.</div> : null}
             {now.length > NOW_MAX ? <div className="plan-hint warn">Больше пяти — день не вывезет. Оставь главное.</div> : null}
-            <button className="btn pri plan-go" onClick={done}><Icon name="check" size={16} />Готово — день спланирован</button>
+            {evening && leftNow.length ? (
+              <button className="btn sec plan-go" onClick={toTomorrow}><Icon name="moon" size={16} />Несделанное — на завтра</button>
+            ) : null}
+            {!evening || !planDone() ? <button className="btn pri plan-go" onClick={done}><Icon name="check" size={16} />Готово — день спланирован</button> : null}
           </div>
+          {did.length ? (
+            <div className="plan-did">
+              <div className="plan-bh"><Icon name="done" size={16} />Сделано сегодня<span className="n">{did.length}</span></div>
+              {did.slice(0, 12).map((t) => <div key={t.id} className="pd-row" onClick={() => openTask(t.id)}><Icon name="check" size={14} />{t.title}</div>)}
+            </div>
+          ) : null}
         </aside>
       </div>
     </Page>
