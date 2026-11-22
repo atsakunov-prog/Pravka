@@ -69,3 +69,9 @@ test('цвет: свой у известного ключа, у незнаком
   assert.match(dirColor('new'), /^hsl\(/);
   assert.equal(dirColor(null), 'var(--fg3)');
 });
+
+test('«Входящие» — только неразобранное: с направлением или под целью задачи там нет', async () => {
+  setup();
+  const { inbox } = await import('./views.ts');
+  assert.deepEqual(inbox().map((t) => t.id), ['d']); // b — своё направление, a/e — под целью, f — направления, c — проект
+});
