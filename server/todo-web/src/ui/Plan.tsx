@@ -101,6 +101,8 @@ export function PlanView() {
           <Block title="Двигает жизнь" icon="tree" tasks={life} tone="var(--accent)" hint="По одной из направлений дерева: никто не ждёт, но это и есть жизнь."
             why={(t) => { const k = mainDir(t); return k ? <span style={{ color: dirColor(k) }}><DirDot k={k} /> {dirShort(k)}</span> : null; }} />
           {!total && !life.length ? <div className="empty"><Icon name="done" size={48} sw={1} /><div className="big">Пусто — и это прекрасно</div></div> : null}
+          {/* на телефоне «Сейчас» сверху, а решения — ниже: «Готово» и здесь, под рукой */}
+          {!evening || !planDone() ? <button className="btn pri plan-go m-only" onClick={done}><Icon name="check" size={16} />Готово — день спланирован</button> : null}
         </div>
         <aside className="plan-side">
           <div className={'plan-now' + (now.length > NOW_MAX ? ' over' : '')}>
