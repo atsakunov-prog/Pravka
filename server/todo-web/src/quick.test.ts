@@ -43,6 +43,10 @@ test('срок словами и время', () => {
   assert.equal(q('Tomorrow at 3pm call').due_time, '15:00');
   assert.equal(q('Купить в 3 банка').due_date, undefined); // «в 3 банка» — не время
   assert.equal(q('Купить в 3 банка').title, 'Купить в 3 банка');
+  // перед глаголом в неопределённой форме число — время (23.11.2026)
+  assert.deepEqual([q('завтра в 9 позвонить врачу').due_time, q('завтра в 9 позвонить врачу').title], ['09:00', 'позвонить врачу']);
+  assert.equal(q('в пятницу в 15 написать Ивану').due_time, '15:00');
+  assert.equal(q('Купить в 2 магазинах').due_time, undefined);
 });
 
 test('повторы', () => {

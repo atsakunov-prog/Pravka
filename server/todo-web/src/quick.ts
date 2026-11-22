@@ -333,7 +333,9 @@ function timeWord(ws: W[], i: number, afterPrep: boolean): { len: number; time: 
     if (suf) return { len: 2, time: shift(hm(h, 0)!, suf), strong: true };
     if (next && /^(час(а|ов)?|ч)$/.test(next.w)) return { len: 2, time: hm(h, 0)!, strong: true };
     // «в 15» в конце или перед другим токеном — время; «в 3 банка» — нет.
-    if (!next || /^[#@%+/{!]|^p[1-4]$/.test(next.w) || wdOf(next.w) !== null || DATE_HEAD.test(next.w)) {
+    // Перед глаголом в неопределённой форме — тоже время (23.11.2026: «напомни завтра в 9 позвонить врачу», «в пятницу
+    // в 15 написать Ивану»): дело так и начинается, а число перед существительным («в 3 банка») остаётся названием.
+    if (!next || /^[#@%+/{!]|^p[1-4]$/.test(next.w) || wdOf(next.w) !== null || DATE_HEAD.test(next.w) || /^[а-яё]{2,}(ть|ться|чь|сти|зти|йти)$/.test(next.w)) {
       return { len: 1, time: hm(h, 0)!, strong: true };
     }
   }

@@ -17,7 +17,8 @@ import { openPop } from './pop.tsx';
 import { LabelPicker, PersonPicker, PriorityMenu, ProjectPicker, Scheduler, type DueVal, type Place } from './pickers.tsx';
 import { openDialog, openDictate, type QuickDefaults } from './state.ts';
 import { DirDot, PlacePicker } from './Krug.tsx';
-import { dirByWord, dirShort, krugOn } from '../krug.ts';
+import { dirShort } from '../krug.ts';
+import { withDir, withRemind } from '../capture.ts';
 import { goals } from '../views.ts';
 
 interface Manual {
@@ -64,6 +65,7 @@ function HighlightInput({ value, onChange, parsed, onKeyDown, placeholder, input
 
 interface Sugg { label: string; insert: string; icon: React.ReactNode; goal?: Id }
 
+
 export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?: QuickDefaults; onClose: () => void; inline?: boolean; keepOpen?: boolean }) {
   const [text, setText] = useState('');
   const [desc, setDesc] = useState('');
@@ -76,17 +78,7 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
   const ctx = useMemo(() => quickCtx(), []);
   // «~Здоровье» — направление дерева жизни (23.11.2026): своё слово строки поверх разбора quick.ts — вырезается из
   // названия и подсвечивается, как остальное распознанное. Цель — выбором из подсказки «~» (у целей длинные имена).
-  const parsed = useMemo(() => {
-    const p = parseQuick(text, ctx);
-    if (!krugOn()) return p;
-    const m = /(^|\s)~([^\s~#@%+/]+)/u.exec(text);
-    const k = m ? dirByWord(m[2]) : null;
-    if (!m || !k) return p;
-    const start = m.index + m[1].length, end = start + 1 + m[2].length;
-    const word = text.slice(start, end);
-    return { ...p, title: p.title.replace(word, '').replace(/\s{2,}/g, ' ').trim(), dir: k,
-      tokens: [...p.tokens, { start, end, kind: 'dir' as TokKind }].sort((a, b) => a.start - b.start) };
-  }, [text, ctx]);
+  const parsed = useMemo(() => withRemind(withDir(parseQuick(text, ctx), text), text), [text, ctx]);
   // Крестик на чипе распознанного (как «Убрать» у Todoist): вырезать его слова из строки — иначе строка распознает снова.
   const cut = (kind: TokKind, word?: string) => setText(cutTokens(text, parsed, kind, word));
 
