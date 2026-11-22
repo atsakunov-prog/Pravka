@@ -1,5 +1,7 @@
 package ru.zf.slushalka.ui
 
+import kotlin.math.roundToLong
+
 import android.content.Intent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -116,12 +118,26 @@ suspend fun PointerInputScope.detectReaderTaps(
      * кроме серии тапов).
      */
     onLongDrag: (Offset) -> Unit = {},
+    /**
+     * Смахивание без пейджера (электронная бумага, 23.11.2026): страница не
+     * едет за пальцем - каждый кадр там мерцание, - а встаёт сразу, когда
+     * палец ушёл вбок. -1 - назад, +1 - вперёд. null - смахивание съедает
+     * пейджер, как раньше.
+     */
+    onSwipe: ((Int) -> Unit)? = null,
+    /**
+     * Тап, который не ждёт серии: на e-ink край листает сразу, без паузы
+     * [MULTI_TAP_MS] - на медленном экране она читалась как задержка. Слово
+     * у края тогда выделяется долгим нажатием, а не двойным тапом.
+     */
+    immediate: (Offset) -> Boolean = { false },
 ) = coroutineScope {
     var series = 0
     var lastUp = 0L
     var lastPos = Offset.Zero
     var single: Job? = null
     val near = 48.dp.toPx()
+    val swipeSlop = 36.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown()
         val joins = series > 0 &&
@@ -130,8 +146,36 @@ suspend fun PointerInputScope.detectReaderTaps(
         // Второй палец по тому же месту - первый тап уже не одиночный.
         if (joins) single?.cancel()
         var cancelled = false
+        var swiped = 0f
         val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-            waitForUpOrCancellation().also { if (it == null) cancelled = true }
+            if (onSwipe == null) waitForUpOrCancellation().also { if (it == null) cancelled = true }
+            else {
+                // Как waitForUpOrCancellation, но палец, ушедший вбок, - это
+                // смахивание, а не долгий тап.
+                var result: androidx.compose.ui.input.pointer.PointerInputChange? = null
+                while (true) {
+                    val event = awaitPointerEvent()
+                    if (event.changes.any { it.isConsumed }) { cancelled = true; break }
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.first()
+                    val moved = change.position - down.position
+                    if (kotlin.math.abs(moved.x) > swipeSlop && kotlin.math.abs(moved.x) > kotlin.math.abs(moved.y) * 1.3f) {
+                        swiped = moved.x
+                        break
+                    }
+                    if (!change.pressed) { result = change; break }
+                }
+                result
+            }
+        }
+        if (swiped != 0f) {
+            // Остаток смахивания - тот же палец: доедаем, лист встаёт сразу.
+            series = 0
+            onSwipe?.invoke(if (swiped < 0f) 1 else -1)
+            do {
+                val event = awaitPointerEvent()
+                event.changes.forEach { it.consume() }
+            } while (event.changes.any { it.pressed })
+            return@awaitEachGesture
         }
         if (up == null) {
             series = 0
@@ -157,7 +201,10 @@ suspend fun PointerInputScope.detectReaderTaps(
         lastUp = up.uptimeMillis
         lastPos = up.position
         val pos = up.position
-        if (series == 1) {
+        if (series == 1 && immediate(pos)) {
+            series = 0
+            onTap(pos)
+        } else if (series == 1) {
             single = launch {
                 delay(MULTI_TAP_MS)
                 onTap(pos)
@@ -283,8 +330,9 @@ data class TextInk(
 fun inkColors(palette: ReaderPalette, eink: Boolean = false): Pair<Color, Color> {
     val dark = palette.bg.luminance() < 0.5f
     // На электронной бумаге цвета нет: выделение - ощутимо серое, пометка -
-    // светло-серая плашка плюс подчёркивание (см. TextInk.underlineNotes).
-    if (eink) return palette.fg.copy(alpha = 0.28f) to palette.fg.copy(alpha = 0.10f)
+    // одно подчёркивание (см. TextInk.underlineNotes). Серая плашка под
+    // буквами там растр, и помеченный кусок читался мутным (23.11.2026).
+    if (eink) return palette.fg.copy(alpha = 0.28f) to Color.Transparent
     val selection = Color(0xFF4A7BD0).copy(alpha = if (dark) 0.38f else 0.26f)
     val note = Color(0xFFE2B84A).copy(alpha = if (dark) 0.26f else 0.34f)
     return selection to note
@@ -322,6 +370,26 @@ val LocalReaderFullscreen = androidx.compose.runtime.staticCompositionLocalOf { 
 
 /** Время для страницы во весь экран: часов системы не видно, а который час, знать хочется. */
 fun clockNow(): String = java.time.LocalTime.now().let { "%d:%02d".format(it.hour, it.minute) }
+
+/**
+ * Заряд в процентах - рядом с часами внизу страницы во весь экран: строки
+ * системы там не видно, а на читалке заряд - первое, что хочется знать
+ * (23.11.2026). null - система не сказала.
+ */
+fun batteryNow(context: android.content.Context): Int? = runCatching {
+    val bm = context.getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager
+    bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
+}.getOrNull()
+
+/** Минуты по-человечески: «12 мин», «1 ч 05 мин», «5 ч». */
+fun minutesLabel(min: Double): String {
+    val m = min.roundToLong().coerceAtLeast(1)
+    return when {
+        m < 60 -> "$m мин"
+        m < 600 -> "${m / 60} ч ${"%02d".format(m % 60)} мин"
+        else -> "${m / 60} ч"
+    }
+}
 
 private val BAR_SHAPE = RoundedCornerShape(18.dp)
 

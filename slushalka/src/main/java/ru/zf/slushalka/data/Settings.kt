@@ -121,10 +121,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         /**
          * На чём читают: телефон, цветная мощная читалка или простая
          * электронная книга. У читалок нет анимаций (каждый кадр - мерцание
-         * экрана), у простой ещё и ни теней, ни зерна, ни объёма книги -
-         * плоская контрастная страница крупнее и жирнее. Сохранённые
-         * настройки не трогает - подменяет их на время чтения, см.
-         * [readerView].
+         * экрана) и чистая печать: белый лист, чёрные буквы, ни зерна, ни
+         * теней; у простой ещё и кегль крупнее. Выставляется разовым набором
+         * (setReaderDevice), а подменяется только неизбежное - [readerView].
          */
         val readerDevice: String = DEVICE_PHONE,
         /** Листать кнопками громкости, когда ничего не звучит. */
@@ -144,6 +143,15 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         val readerTaps: String = TAPS_EDGES,
         /** Поворот экрана в читалке: как телефон, только книжно или только альбомно. */
         val readerOrientation: String = ORIENT_AUTO,
+        /**
+         * Промывка электронной бумаги: через сколько страниц экран один раз
+         * вспыхивает чёрным и белым. Частичное обновление e-ink оставляет
+         * тень прежних страниц, и к десятой странице лист серый - так
+         * делают все читалки (23.11.2026). Ноль - не промывать.
+         */
+        val readerEinkRefresh: Int = EINK_REFRESH_DEFAULT,
+        /** Что делает штрих пера по тексту: маркер, выделение или ничего. */
+        val readerPen: String = PEN_MARK,
         // Масштаб всего интерфейса: на большом планшете или читалке с крупным
         // экраном система нередко считает плотность малой, и кнопки с надписями
         // выходят мелкими. Множитель к плотности - растёт всё разом, включая
@@ -293,6 +301,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                 readerWeight = p[KEY_R_WEIGHT]?.takeIf { it in WEIGHTS } ?: WEIGHT_NORMAL,
                 readerTaps = p[KEY_R_TAPS]?.takeIf { it in TAPS } ?: TAPS_EDGES,
                 readerOrientation = p[KEY_R_ORIENT]?.takeIf { it in ORIENTS } ?: ORIENT_AUTO,
+                readerEinkRefresh = p[KEY_R_REFRESH]?.takeIf { it in EINK_REFRESHES } ?: EINK_REFRESH_DEFAULT,
+                readerPen = p[KEY_R_PEN]?.takeIf { it in PENS } ?: PEN_MARK,
                 uiScale = p[KEY_UI_SCALE]?.takeIf { it in UI_SCALES } ?: 1.0f,
                 updateUrl = p[KEY_UPD_URL] ?: DEFAULT_UPDATE_URL,
                 updateAuto = p[KEY_UPD_AUTO] ?: true,
@@ -409,6 +419,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setReaderWeight(v: String) = edit { if (v in WEIGHTS) it[KEY_R_WEIGHT] = v }
     suspend fun setReaderTaps(v: String) = edit { if (v in TAPS) it[KEY_R_TAPS] = v }
     suspend fun setReaderOrientation(v: String) = edit { if (v in ORIENTS) it[KEY_R_ORIENT] = v }
+    suspend fun setReaderEinkRefresh(v: Int) = edit { if (v in EINK_REFRESHES) it[KEY_R_REFRESH] = v }
+    suspend fun setReaderPen(v: String) = edit { if (v in PENS) it[KEY_R_PEN] = v }
 
     /**
      * Устройство - разовый набор, а не вечная подмена (16.11.2026). Раньше
@@ -433,48 +445,60 @@ class Settings(private val context: Context, scope: CoroutineScope) {
      * не меняется, а дальше вид правится в одном месте.
      */
     suspend fun migrateDevicePreset() = edit {
-        if ((it[KEY_DEVICE_PRESET] ?: 0) >= DEVICE_PRESET_VERSION) return@edit
+        val version = it[KEY_DEVICE_PRESET] ?: 0
+        if (version >= DEVICE_PRESET_VERSION) return@edit
         val device = it[KEY_R_DEVICE]?.takeIf { d -> d in DEVICES }
             ?: if (it[KEY_R_EINK] ?: EinkDevice.likely) DEVICE_EINK_LOW else DEVICE_PHONE
-        applyDevicePreset(it, DEVICE_PHONE, device)
+        if (version < 1) applyDevicePreset(it, DEVICE_PHONE, device)
+        // Второй набор (23.11.2026) - только чистая печать: кегль и прочее,
+        // что выставил первый, не трогаем, иначе он вырос бы ещё раз.
+        else if (device != DEVICE_PHONE) applyCleanInk(it)
         it[KEY_DEVICE_PRESET] = DEVICE_PRESET_VERSION
+    }
+
+    /**
+     * Чистая печать для электронной бумаги (23.11.2026). Владелец на Boox:
+     * «нечёткие буквы, небелая страница, и буквы нечёрные». Кремовая бумага
+     * и тёплая тёмно-серая краска на e-ink - не цвет, а растр: цветная
+     * Kaleido рисует их точками сквозь цветной фильтр вдвое реже чёрного, и
+     * буква рассыпается. Зерно, просвет оборота и тени - та же серая сыпь.
+     * Поэтому на любой читалке один раз: чистый белый и чистый чёрный,
+     * плоский лист без рисунка бумаги. Дальше что выбрано - то и на экране.
+     */
+    private fun applyCleanInk(p: androidx.datastore.preferences.core.MutablePreferences) {
+        p[KEY_R_PAGED] = true
+        p[KEY_R_PAGE_STYLE] = PAGE_FLAT
+        p[KEY_R_SHADOW] = SHADOW_NONE
+        p[KEY_R_BEVEL] = false
+        p[KEY_R_SHEEN] = false
+        p[KEY_R_GRAIN] = false
+        p[KEY_R_IMPERFECT] = false
+        p[KEY_R_BLEED] = false
+        p[KEY_R_BOOK_TURN] = BOOK_TURN_FADE
+        val dark = p[KEY_R_THEME] in setOf(THEME_BLACK, THEME_GREY, THEME_WARM, THEME_EINK_NIGHT)
+        p[KEY_R_THEME] = if (dark) THEME_EINK_NIGHT else THEME_EINK
+        if (p[KEY_R_WEIGHT] == null || p[KEY_R_WEIGHT] == WEIGHT_NORMAL) p[KEY_R_WEIGHT] = WEIGHT_MEDIUM
     }
 
     private fun applyDevicePreset(p: androidx.datastore.preferences.core.MutablePreferences, from: String, to: String) {
         val size = p[KEY_R_SIZE] ?: 19
         when (to) {
             DEVICE_EINK_LOW -> {
-                p[KEY_R_PAGED] = true
-                p[KEY_R_PAGE_STYLE] = PAGE_FLAT
-                p[KEY_R_SHADOW] = SHADOW_NONE
-                p[KEY_R_BEVEL] = false
-                p[KEY_R_SHEEN] = false
-                p[KEY_R_GRAIN] = false
-                p[KEY_R_IMPERFECT] = false
-                p[KEY_R_BLEED] = false
-                p[KEY_R_BOOK_TURN] = BOOK_TURN_FADE
-                p[KEY_R_WEIGHT] = WEIGHT_MEDIUM
-                p[KEY_R_THEME] = if (p[KEY_R_THEME] == THEME_BLACK) THEME_EINK_NIGHT else THEME_EINK
+                applyCleanInk(p)
                 if (from != DEVICE_EINK_LOW) p[KEY_R_SIZE] = (size + EINK_SIZE_BOOST).coerceIn(12, 34)
             }
             DEVICE_EINK_HIGH -> {
-                p[KEY_R_PAGED] = true
-                p[KEY_R_GRAIN] = false
-                p[KEY_R_BOOK_TURN] = BOOK_TURN_FADE
-                p[KEY_R_WEIGHT] = WEIGHT_MEDIUM
-                if (from == DEVICE_EINK_LOW) {
-                    p[KEY_R_SIZE] = (size - EINK_SIZE_BOOST).coerceIn(12, 34)
-                    if (p[KEY_R_THEME] == THEME_EINK) p[KEY_R_THEME] = THEME_PAPER
-                    if (p[KEY_R_THEME] == THEME_EINK_NIGHT) p[KEY_R_THEME] = THEME_BLACK
-                }
+                // Цветной читалке - та же чистая печать: цвет у неё в
+                // картинках и обложках, а текст держится только чёрным по белому.
+                applyCleanInk(p)
+                if (from == DEVICE_EINK_LOW) p[KEY_R_SIZE] = (size - EINK_SIZE_BOOST).coerceIn(12, 34)
             }
             else -> if (from != DEVICE_PHONE) {
                 p[KEY_R_WEIGHT] = WEIGHT_NORMAL
-                if (from == DEVICE_EINK_LOW) {
-                    p[KEY_R_SIZE] = (size - EINK_SIZE_BOOST).coerceIn(12, 34)
-                    if (p[KEY_R_THEME] == THEME_EINK) p[KEY_R_THEME] = THEME_AUTO
-                    if (p[KEY_R_THEME] == THEME_EINK_NIGHT) p[KEY_R_THEME] = THEME_BLACK
-                }
+                if (from == DEVICE_EINK_LOW) p[KEY_R_SIZE] = (size - EINK_SIZE_BOOST).coerceIn(12, 34)
+                // Чистая бумага - у обеих читалок (23.11.2026): телефону - обратно своя.
+                if (p[KEY_R_THEME] == THEME_EINK) p[KEY_R_THEME] = THEME_AUTO
+                if (p[KEY_R_THEME] == THEME_EINK_NIGHT) p[KEY_R_THEME] = THEME_BLACK
             }
         }
     }
@@ -767,7 +791,31 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         }
 
         /** Версия разового набора устройства: выросла - набор применяется ещё раз (см. [migrateDevicePreset]). */
-        const val DEVICE_PRESET_VERSION = 1
+        const val DEVICE_PRESET_VERSION = 2
+
+        // Промывка электронной бумаги: раз в столько страниц экран вспыхивает
+        // чёрным и белым и стирает тень прежних страниц. Ноль - не промывать.
+        val EINK_REFRESHES = listOf(0, 1, 5, 10, 20)
+        const val EINK_REFRESH_DEFAULT = 10
+
+        fun einkRefreshLabel(v: Int): String = when (v) {
+            0 -> "Нет"
+            1 -> "Каждую"
+            else -> "Раз в $v"
+        }
+
+        // Перо (23.11.2026, Boox с пером): штрих по строке - маркер сразу или
+        // только выделение, с которым дальше как с выделенным пальцем.
+        const val PEN_MARK = "mark"
+        const val PEN_SELECT = "select"
+        const val PEN_OFF = "off"
+        val PENS = listOf(PEN_MARK, PEN_SELECT, PEN_OFF)
+
+        fun penLabel(v: String): String = when (v) {
+            PEN_SELECT -> "Выделение"
+            PEN_OFF -> "Как палец"
+            else -> "Маркер"
+        }
 
         // Как уходит страница: смахиванием из колоды, сдвигом (как было) или
         // растворяясь. Поворот вокруг корешка убран вместе с самим корешком.
@@ -927,6 +975,8 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_R_TAPS = stringPreferencesKey("reader_taps")
         private val KEY_R_ORIENT = stringPreferencesKey("reader_orientation")
         private val KEY_DEVICE_PRESET = intPreferencesKey("reader_device_preset")
+        private val KEY_R_REFRESH = intPreferencesKey("reader_eink_refresh")
+        private val KEY_R_PEN = stringPreferencesKey("reader_pen")
         private val KEY_UI_SCALE = floatPreferencesKey("ui_scale")
         private val KEY_UPD_URL = stringPreferencesKey("update_url")
         private val KEY_UPD_AUTO = booleanPreferencesKey("update_auto")
@@ -975,8 +1025,21 @@ fun Settings.Prefs.readerView(): Settings.Prefs =
     // прокрутка (шлейф на каждом кадре) и загиб листа. Всё остальное, что ей
     // идёт, выставляет разовый набор устройства (Settings.setReaderDevice), а
     // дальше что выбрано - то и на экране.
+    //
+    // С 23.11.2026 ещё и то, что на e-ink не вид, а порча букв: «неровности
+    // печати» (ореол краски размытой тенью, полоса под углом в доли градуса -
+    // буквы пересчитываются по пикселям и мылятся, полупрозрачная краска по
+    // словам), матовость и просвет оборота - серая сыпь по белому. Владелец
+    // на Boox: «нечёткие буквы, небелая страница». В листе «Вид» на читалке
+    // этих тумблеров нет, так что «выбрал, а не видно» не бывает.
     if (!readerEink) this
-    else copy(readerPaged = true, readerBookTurn = Settings.BOOK_TURN_FADE)
+    else copy(
+        readerPaged = true,
+        readerBookTurn = Settings.BOOK_TURN_FADE,
+        readerImperfect = false,
+        readerGrain = false,
+        readerBleed = false,
+    )
 
 /**
  * Похоже ли устройство на электронную книгу. По производителю и модели: у

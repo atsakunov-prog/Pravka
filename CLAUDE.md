@@ -52,9 +52,25 @@ APK `ru.zf.slushalka`. Живёт в ветке **`slushalka`** репозито
     переводит `migrateDevicePreset` (из `AppState.start`). `Prefs.readerView()`
     подменяет только неизбежное — страницами и без загиба. `EinkDevice.likely`
     — заводское «простая» на электронных книгах; тема приложения —
-    `SlushalkaTheme(eink = readerEinkLow)`; плашки — `LocalEink` (любая);
-    кнопки листания — `PageKeys` (ловит `MainActivity.dispatchKeyEvent`,
-    громкость — только когда тихо).
+    `SlushalkaTheme(eink = readerEink)` (с 23.11 — любая читалка); плашки —
+    `LocalEink` (любая); кнопки листания — `PageKeys` (ловит
+    `MainActivity.dispatchKeyEvent`, громкость — только когда тихо). С
+    23.11.2026 чистая печать: второй набор `applyCleanInk`
+    (`DEVICE_PRESET_VERSION = 2`: чистый белый/чёрный, плоско, без
+    рисунка бумаги), а `readerView` на e-ink ещё и гасит неровности,
+    матовость и просвет (на e-ink это мыло и сыпь); смахивание без пейджера
+    и тап по краю без паузы — `detectReaderTaps(onSwipe, immediate)`,
+    промывка экрана — `readerEinkRefresh` (вспышка `flashSeq` в
+    `ReaderScreen`).
+  - Классика читалок (23.11.2026): закладки — `Note.kind = "bookmark"` в
+    тех же пометках (`Notes.bookmarksOf`; `of`/`count` их не видят), уголок —
+    `PagedBody(onCorner)`, список — вкладка в `ContentsSheet`; «Вернуться» —
+    `jumpTo`/`backTo` (все переходы читалки — через `jumpTo`); словарь —
+    `ReaderDict.kt` (`ACTION_PROCESS_TEXT` + ColorDict, `<queries>` в
+    манифесте); заряд — `batteryNow`; «до конца главы» — `chapterLeft` по
+    медиане страниц. Перо — `Pen.kt` (`penInput` первым проходом над телом,
+    `PenStroke.closed/vertical`, разбор — `penStroke` в `ReaderScreen`,
+    `Prefs.readerPen`). Переход к прежнему якорю — `anchorSeq` в `PagedBody`.
   - Читалка во весь экран (`readerFullscreen`), своя яркость
     (`readerBrightness`), насыщенность (`readerWeight`), зоны тапа
     (`readerTaps`, `tapZone`), поворот (`readerOrientation`) — эффектами в

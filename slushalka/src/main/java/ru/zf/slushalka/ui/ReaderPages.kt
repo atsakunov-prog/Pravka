@@ -185,6 +185,11 @@ internal fun PagedBody(
     instant: Boolean,
     /** Как делить экран тапом: Settings.TAPS_*. */
     taps: String,
+    /**
+     * Тап в верхний угол у наружного края - закладка, как загнутый уголок
+     * (23.11.2026). null - угол листает, как прежде.
+     */
+    onCorner: (() -> Unit)? = null,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val density = LocalDensity.current
@@ -250,9 +255,15 @@ internal fun PagedBody(
             pageCount = { (slotOf(pages.lastIndex) + 1).coerceAtLeast(1) },
         )
 
+        // Номер перехода: переход к тому же знаку, что прошлый якорь (закладка
+        // на месте, с которого открылась книга; та же глава второй раз), не
+        // менял якорь, разбивка не перезапускалась - и читалка стояла на месте
+        // (23.11.2026, видно на закладках).
+        var anchorSeq by remember { mutableIntStateOf(0) }
         LaunchedEffect(target) {
             target?.let {
                 anchor = it
+                anchorSeq++
                 onTargetUsed()
             }
         }
@@ -274,10 +285,12 @@ internal fun PagedBody(
         // откатывала к месту, с которого когда-то пришли.
         var shownStart by remember { mutableIntStateOf(-1) }
         var lastAnchor by remember { mutableIntStateOf(Int.MIN_VALUE) }
-        LaunchedEffect(anchor, widthPx, heightPx, style, headingStyle, blocks, shape.spread) {
+        var lastSeq by remember { mutableIntStateOf(-1) }
+        LaunchedEffect(anchor, anchorSeq, widthPx, heightPx, style, headingStyle, blocks, shape.spread) {
             if (widthPx <= 0 || heightPx <= 0) return@LaunchedEffect
-            val at = if (anchor != lastAnchor || shownStart < 0) anchor else shownStart
+            val at = if (anchor != lastAnchor || anchorSeq != lastSeq || shownStart < 0) anchor else shownStart
             lastAnchor = anchor
+            lastSeq = anchorSeq
             if (at < 0) return@LaunchedEffect
             val range = windowFor(at)
             window = range
@@ -438,6 +451,9 @@ internal fun PagedBody(
             val k = keyTurn ?: return@LaunchedEffect
             turnTo(pagerState.currentPage + k.dir, null)
         }
+        // Жесты заводятся один раз, а закладки на странице меняются: берём свежий обработчик.
+        val cornerOn = onCorner != null
+        val cornerTap by androidx.compose.runtime.rememberUpdatedState(onCorner)
         Box(
             Modifier
                 .fillMaxSize()
@@ -447,10 +463,19 @@ internal fun PagedBody(
                     pan = shape.half, leafTurn = leafTurn, sheet = sheetOf,
                     onCurlStart = ::snapshotBack, settle = settle,
                 )
-                .pointerInput(pages, shape.spread, taps) {
+                .pointerInput(pages, shape.spread, taps, instant, cornerOn) {
+                    // Уголок закладки: квадрат в палец у верхнего наружного края.
+                    val corner = 56.dp.toPx()
+                    val inCorner: (Offset) -> Boolean = { pos ->
+                        cornerOn && pos.x > size.width - corner && pos.y < topInset.toPx() + corner
+                    }
                     detectReaderTaps(
                         onTap = { pos ->
                             if (onTap(pos + origin)) return@detectReaderTaps
+                            if (inCorner(pos)) {
+                                cornerTap?.invoke()
+                                return@detectReaderTaps
+                            }
                             val slot = pagerState.currentPage
                             val dir = tapZone(taps, pos.x, pos.y, size.width.toFloat(), size.height.toFloat())
                             if (dir == 0) {
@@ -467,6 +492,12 @@ internal fun PagedBody(
                             onLongPress(pos + origin, pages.getOrNull(at)?.startChar)
                         },
                         onLongDrag = { pos -> onLongDrag(pos + origin) },
+                        // На e-ink лист не едет за пальцем: смахнул - встал.
+                        onSwipe = if (instant) { dir -> turnTo(pagerState.currentPage + dir, null) } else null,
+                        immediate = { pos ->
+                            instant && (inCorner(pos) ||
+                                tapZone(taps, pos.x, pos.y, size.width.toFloat(), size.height.toFloat()) != 0)
+                        },
                     )
                 },
         ) {
@@ -538,7 +569,9 @@ internal fun PagedBody(
                 flingBehavior = fling,
                 // Загиб ведёт пейджер сам: его собственное листание меряет ход
                 // шириной экрана, а листу до корешка - другой путь.
-                userScrollEnabled = !curlOn,
+                // На электронной бумаге - тоже сам (detectReaderTaps.onSwipe):
+                // лист, ползущий за пальцем, там - десяток мерцающих кадров.
+                userScrollEnabled = !curlOn && !instant,
                 // На половине разворота за корешком видна соседняя страница -
                 // её надо держать в композиции и в покое, иначе в полоске
                 // подглядывания пусто. При загибе соседи тоже нужны: за
@@ -911,11 +944,15 @@ internal fun BoxScope.PageMarksLayer(
     // Кегль колонтитула - 60% основного, разрядка 0.08 em: так он читается
     // служебной строкой, а не началом текста. Высота строки - та же, по
     // которой поля страницы оставляют место под колонтитул ([markLine]).
+    // На электронной бумаге колонтитул - той же краской, что текст: серый
+    // мелкий кегль там рассыпается в точки (23.11.2026).
+    val eink = LocalEink.current
+    val ruleColor = if (eink) palette.fg else palette.dim.copy(alpha = 0.45f)
     val small = style.copy(
         fontSize = style.fontSize * 0.6f,
         lineHeight = style.fontSize * 0.78f,
         letterSpacing = style.fontSize * 0.08f,
-        color = palette.dim,
+        color = if (eink) palette.fg else palette.dim,
         textAlign = TextAlign.Start,
         fontWeight = FontWeight.Normal,
     )
@@ -962,8 +999,8 @@ internal fun BoxScope.PageMarksLayer(
             }
             HorizontalDivider(
                 Modifier.fillMaxWidth().padding(top = 3.dp),
-                thickness = 0.8.dp,
-                color = palette.dim.copy(alpha = 0.45f),
+                thickness = if (eink) 1.dp else 0.8.dp,
+                color = ruleColor,
             )
         }
     }
@@ -983,8 +1020,8 @@ internal fun BoxScope.PageMarksLayer(
         ) {
             HorizontalDivider(
                 Modifier.fillMaxWidth().padding(bottom = 3.dp),
-                thickness = 0.8.dp,
-                color = palette.dim.copy(alpha = 0.45f),
+                thickness = if (eink) 1.dp else 0.8.dp,
+                color = ruleColor,
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 // Время - у корешка, номер - у наружного края; на левой странице

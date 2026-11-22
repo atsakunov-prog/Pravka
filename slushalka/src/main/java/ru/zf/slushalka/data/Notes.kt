@@ -23,7 +23,20 @@ data class Note(
     val text: String,
     val updatedAt: Long,
     val deleted: Boolean = false,
-)
+    /**
+     * Что это: пометка или маркер (пусто) либо закладка ([KIND_BOOKMARK],
+     * 23.11.2026). Закладка живёт здесь же, а не своим файлом: так она едет
+     * между устройствами тем же `пометки-<имя>.json` и тем же слиянием.
+     * Сборки до 23.11 поля не знают и покажут её пометкой без слов.
+     */
+    val kind: String = "",
+) {
+    val bookmark: Boolean get() = kind == KIND_BOOKMARK
+
+    companion object {
+        const val KIND_BOOKMARK = "bookmark"
+    }
+}
 
 /**
  * Пометки по книгам. Хранятся у себя и уезжают в `_Слушалка/пометки-<имя>.json`
@@ -45,13 +58,18 @@ class Notes(context: Context) {
         }
     }
 
-    /** Живые пометки книги по порядку текста. */
+    /** Живые пометки книги по порядку текста - без закладок: те не маркер и не мысль. */
     @Synchronized
     fun of(bookId: String): List<Note> =
-        byBook[bookId].orEmpty().filter { !it.deleted }.sortedBy { it.start }
+        byBook[bookId].orEmpty().filter { !it.deleted && !it.bookmark }.sortedBy { it.start }
 
     @Synchronized
-    fun count(bookId: String): Int = byBook[bookId].orEmpty().count { !it.deleted }
+    fun count(bookId: String): Int = byBook[bookId].orEmpty().count { !it.deleted && !it.bookmark }
+
+    /** Живые закладки книги по порядку текста. */
+    @Synchronized
+    fun bookmarksOf(bookId: String): List<Note> =
+        byBook[bookId].orEmpty().filter { !it.deleted && it.bookmark }.sortedBy { it.start }
 
     /** Новая или поправленная: узнаётся по [Note.id]. */
     @Synchronized
@@ -126,6 +144,7 @@ class Notes(context: Context) {
                     JSONObject().put("id", it.id).put("s", it.start).put("e", it.end)
                         .put("q", it.quote).put("t", it.text).put("u", it.updatedAt)
                         .put("del", it.deleted)
+                        .apply { if (it.kind.isNotEmpty()) put("k", it.kind) }
                 )
             }
         }
@@ -140,6 +159,7 @@ class Notes(context: Context) {
                 text = o.optString("t"),
                 updatedAt = o.optLong("u"),
                 deleted = o.optBoolean("del"),
+                kind = o.optString("k"),
             )
         }
     }

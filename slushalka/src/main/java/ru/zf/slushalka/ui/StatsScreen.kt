@@ -566,7 +566,7 @@ private fun SummaryCard(app: SlushalkaApp, r: Stats.Report, books: List<ru.zf.sl
     fun inRange(at: Long) = Stats.readingDay(at, zone) in from..to
     val asks = remember(r, period) { app.askLog.all().values.flatten().filter { inRange(it.at) } }
     val notes = remember(r, period) {
-        app.notes.all().values.flatten().filter { !it.deleted && inRange(it.id) }.size
+        app.notes.all().values.flatten().filter { !it.deleted && !it.bookmark && inRange(it.id) }.size
     }
     val title: (String) -> String = { id -> books.firstOrNull { it.id == id }?.title ?: id.substringAfterLast('/') }
     val headline = when (period) {

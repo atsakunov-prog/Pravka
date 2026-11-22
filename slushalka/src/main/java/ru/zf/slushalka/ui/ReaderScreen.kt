@@ -43,6 +43,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -150,10 +151,9 @@ fun ReaderScreen(
     // Дальше читалка видит настройки через режим e-ink: он подменяет то, что
     // электронная бумага показывает плохо, а сохранённое не трогает.
     val prefs = stored.readerView()
-    // Любая электронная бумага: без анимаций, шрифт плотнее. Простая - ещё
-    // и маркер пометок подчёркиванием: цветной на ней бледно-серый.
+    // Любая электронная бумага: без анимаций, чистая печать, маркер пометок -
+    // подчёркиванием (23.11.2026: цветная плашка на e-ink - растр).
     val eink = stored.readerEink
-    val einkLow = stored.readerEinkLow
     val busy by state.busy.collectAsState()
     val play by app.player.state.collectAsState()
     val speech by app.readAloud.state.collectAsState()
@@ -183,6 +183,16 @@ fun ReaderScreen(
     var showClaude by remember { mutableStateOf(false) }
     var showNotes by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    // Словарь у выделенного слова (23.11.2026).
+    var dictWord by remember { mutableStateOf<String?>(null) }
+    // Откуда прыгнули - по содержанию, полоске, поиску, закладке: туда можно
+    // вернуться одним тапом, как «Назад» в любой читалке (23.11.2026).
+    var backTo by remember { mutableStateOf<Int?>(null) }
+    var landedAt by remember { mutableStateOf<Int?>(null) }
+    // Промывка электронной бумаги: номер вспышки (растёт - вспыхнуть) и её фаза.
+    var flashSeq by remember { mutableIntStateOf(0) }
+    var flash by remember { mutableIntStateOf(0) }
+    val penInk = remember { PenInk() }
     // Кнопка листания (громкость, PageDown электронной книги) - просьба телу читалки.
     var keyTurn by remember { mutableStateOf<KeyTurn?>(null) }
     DisposableEffect(Unit) {
@@ -337,9 +347,11 @@ fun ReaderScreen(
     }
     // Часов системы во весь экран не видно - время стоит на странице.
     var clock by remember { mutableStateOf(clockNow()) }
+    var battery by remember { mutableStateOf(batteryNow(context)) }
     LaunchedEffect(stored.readerFullscreen) {
         while (stored.readerFullscreen) {
             clock = clockNow()
+            battery = batteryNow(context)
             val now = java.time.LocalTime.now()
             kotlinx.coroutines.delay((60 - now.second) * 1000L - now.nano / 1_000_000 + 50)
         }
@@ -522,6 +534,21 @@ fun ReaderScreen(
     // откатывало бы звук к началу страницы. Перелистнули - верх экрана.
     fun readPlace(): Int = place?.takeIf { it >= offset && it < shownEnd } ?: offset
 
+    /** Это место на экране. */
+    fun visible(at: Int): Boolean = at >= offset && at < shownEnd.coerceAtLeast(offset + 1)
+
+    /**
+     * Переход по книге (содержание, полоска, поиск, закладка): прежнее место
+     * запоминается, и строка «Вернуться» внизу ведёт назад - и снова сюда.
+     */
+    fun jumpTo(at: Int, light: Boolean = false) {
+        if (!visible(at)) backTo = readPlace()
+        landedAt = at
+        place = null
+        target = at
+        pendingHighlight = if (light) at else null
+    }
+
     // Смена способа листать посреди чтения: новое тело читалки открывается на
     // той же странице. Само оно места не знает - переход ему задаётся целью,
     // а цель к этому моменту уже израсходована прежним телом. Без этого
@@ -613,7 +640,8 @@ fun ReaderScreen(
     // Номер считается от начала самой страницы, а не от верха экрана: в
     // развороте страниц две, и на живой сборке обе показывали один и тот же
     // номер.
-    val time = if (stored.readerFullscreen) clock else ""
+    // Во весь экран строки системы нет: время и заряд стоят на странице.
+    val time = if (stored.readerFullscreen) listOfNotNull(clock, battery?.let { "$it%" }).joinToString("  ") else ""
     val marksAt: (Int, PageNo?) -> PageMarks = { at, no ->
         val share = (at.toFloat() / t.length.coerceAtLeast(1)).coerceIn(0f, 1f)
         val page = no?.page ?: t.pageOf(at)
@@ -644,7 +672,7 @@ fun ReaderScreen(
     // Пометки книги: маркером в тексте и списком за кнопкой «Пометки».
     val notesRev by app.notes.revision.collectAsState()
     val notes = remember(notesRev, bk.id) { app.notes.of(bk.id) }
-    val (selectionColor, noteColor) = inkColors(palette, einkLow)
+    val (selectionColor, noteColor) = inkColors(palette, eink)
     val ink = TextInk(
         highlight = speechRange ?: highlightRange,
         highlightAlpha = if (speechRange != null) SPEECH_ALPHA else highlight.value,
@@ -652,9 +680,9 @@ fun ReaderScreen(
         notes = remember(notes) { notes.map { it.start..it.end } },
         selectionColor = selectionColor,
         noteColor = noteColor,
-        // Тёплый маркер на e-ink - бледно-серая плашка, её не видно:
-        // пометка там ещё и подчёркнута.
-        underlineNotes = einkLow,
+        // На e-ink маркер - подчёркивание без плашки: плашка под буквами там
+        // растр, и помеченное читалось мутным (23.11.2026).
+        underlineNotes = eink,
     )
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
@@ -740,52 +768,236 @@ fun ReaderScreen(
         editingByVoice = voice
     }
 
+    /**
+     * Маркер без слов. Перекрывающие его пустые маркеры сливаются в один:
+     * перо, проведённое второй раз по той же строке, не плодит дубли.
+     */
+    fun markRange(r: IntRange) {
+        val touching = notes.filter { it.text.isBlank() && it.start <= r.last && it.end >= r.first }
+        val from = (touching.map { it.start } + r.first).min()
+        val to = (touching.map { it.end } + r.last).max()
+        touching.forEach { app.notes.remove(bk.id, it.id) }
+        val now = System.currentTimeMillis()
+        app.notes.put(
+            bk.id,
+            ru.zf.slushalka.data.Note(
+                id = now, start = from, end = to,
+                quote = quoteOf(from..to).take(NOTE_QUOTE_MAX), text = "", updatedAt = now,
+            ),
+        )
+        app.scope.launch { state.syncPush(bk.id) }
+    }
+
+    // Закладки (23.11.2026): уголок страницы, кнопка в верхней плашке, список -
+    // в «Содержании». Закладка стоит на начале страницы: разбивка меняется с
+    // кеглем, а знак книги - нет.
+    val bookmarks = remember(notesRev, bk.id) { app.notes.bookmarksOf(bk.id) }
+    val pageMarked = bookmarks.any { visible(it.start) }
+    fun toggleBookmark() {
+        val here = bookmarks.filter { visible(it.start) }
+        if (here.isNotEmpty()) {
+            here.forEach { app.notes.remove(bk.id, it.id) }
+            notice = "Закладка снята"
+        } else {
+            val at = offset.coerceIn(0, (t.length - 1).coerceAtLeast(0))
+            var end = (at + 120).coerceAtMost(t.length)
+            while (end < t.length && end > at && t.plain[end - 1].isLetterOrDigit()) end++
+            val now = System.currentTimeMillis()
+            app.notes.put(
+                bk.id,
+                ru.zf.slushalka.data.Note(
+                    id = now, start = at, end = end,
+                    quote = t.plain.substring(at, end).replace('\n', ' ').trim(),
+                    text = "", updatedAt = now, kind = ru.zf.slushalka.data.Note.KIND_BOOKMARK,
+                ),
+            )
+            notice = "Закладка"
+        }
+        app.scope.launch { state.syncPush(bk.id) }
+    }
+
+    // Перо: что нарисовали, когда подняли.
+    val density = LocalDensity.current
+    fun penStroke(stroke: PenStroke) {
+        val line = with(density) { (prefs.readerSize * prefs.readerLineHeight).sp.toPx() }
+        // Черта под строкой ложится в межстрочье, а то и под последнюю строку
+        // абзаца: ищем знак чуть выше пера.
+        fun charNear(p: androidx.compose.ui.geometry.Offset): Int? =
+            listOf(0f, 0.3f, 0.6f).firstNotNullOfOrNull { k ->
+                hits.charAt(p - androidx.compose.ui.geometry.Offset(0f, line * k), ::onScreen)?.takeIf(::visible)
+            }
+        if (stroke.erase) {
+            val chars = stroke.points.mapNotNull(::charNear)
+            if (chars.isEmpty()) return
+            val lo = chars.min()
+            val hi = chars.max()
+            val hit = notes.filter { it.start <= hi && it.end > lo }
+            val doomed = hit.filter { it.text.isBlank() }
+            when {
+                doomed.isNotEmpty() -> {
+                    doomed.forEach { app.notes.remove(bk.id, it.id) }
+                    app.scope.launch { state.syncPush(bk.id) }
+                    notice = "Стёр маркер"
+                }
+                hit.isNotEmpty() -> notice = "Пометку со словами стирают в ней самой"
+            }
+            return
+        }
+        val b = stroke.bounds
+        val closed = stroke.closed(line)
+        val raw = when {
+            closed -> hits.select(b)
+            // Черта по полю: строки, мимо которых она прошла.
+            stroke.vertical(line) -> hits.select(androidx.compose.ui.geometry.Rect(0f, b.top, 100_000f, b.bottom))
+            else -> stroke.points.mapNotNull(::charNear).takeIf { it.isNotEmpty() }?.let { it.min()..(it.max() + 1) }
+        }
+        val range = raw
+            ?.let { maxOf(it.first, offset)..minOf(it.last, shownEnd.coerceAtLeast(offset + 1)) }
+            ?.takeIf { it.last > it.first }
+            ?.let { snapToWords(t.plain, it) }
+        if (range == null || range.last - range.first < 2) {
+            notice = "Перо не попало по тексту"
+            return
+        }
+        if (closed || stored.readerPen == Settings.PEN_SELECT) {
+            selection = range
+            return
+        }
+        markRange(range)
+        notice = "Отметил пером"
+    }
+
+    // Промывка электронной бумаги: раз в N страниц экран вспыхивает чёрным,
+    // потом белым - частичное обновление e-ink копит тень прежних страниц,
+    // и к десятой странице белый лист серый.
+    var turned by remember { mutableIntStateOf(0) }
+    var lastShown by remember { mutableIntStateOf(-1) }
+    LaunchedEffect(offset, shownEnd) {
+        if (shownEnd <= 0) return@LaunchedEffect
+        val every = stored.readerEinkRefresh
+        val turnedPage = lastShown >= 0 && offset != lastShown
+        lastShown = offset
+        if (!eink || every <= 0 || !turnedPage) return@LaunchedEffect
+        turned++
+        if (turned >= every) {
+            turned = 0
+            flashSeq++
+        }
+    }
+    LaunchedEffect(flashSeq) {
+        if (flashSeq == 0) return@LaunchedEffect
+        try {
+            flash = 1
+            kotlinx.coroutines.delay(EINK_FLASH_BLACK_MS)
+            flash = 2
+            kotlinx.coroutines.delay(EINK_FLASH_WHITE_MS)
+        } finally {
+            flash = 0
+        }
+    }
+    // «Вернуться» гаснет, когда ушёл читать дальше от места, куда прыгнул.
+    LaunchedEffect(offset, shownEnd) {
+        val landed = landedAt ?: return@LaunchedEffect
+        if (backTo == null || shownEnd <= offset) return@LaunchedEffect
+        val page = (shownEnd - offset).coerceAtLeast(300)
+        if (kotlin.math.abs(offset - landed) > page * 8) {
+            backTo = null
+            landedAt = null
+        }
+    }
+    // Сколько текста на обычной странице: медиана последних страниц. По одной
+    // нынешней нельзя - страница с картинкой или концом главы почти пустая, и
+    // «до конца главы» выходило в тысячу страниц (видно на эмуляторе).
+    val pageSizes = remember(bk.id) { ArrayDeque<Int>() }
+    var typicalPage by remember(bk.id) { mutableIntStateOf(0) }
+    LaunchedEffect(offset, shownEnd) {
+        val size = (shownEnd - offset) / (if (spread) 2 else 1)
+        if (size < 300) return@LaunchedEffect
+        pageSizes.addLast(size)
+        while (pageSizes.size > 12) pageSizes.removeFirst()
+        typicalPage = pageSizes.sorted()[pageSizes.size / 2]
+    }
+    // Темп чтения - из журнала подходов: «до конца главы ≈12 мин».
+    val readCpm by androidx.compose.runtime.produceState<Double?>(null, bk.id) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            runCatching { ru.zf.slushalka.stats.Stats.report(app.journal.all()).readCpm }.getOrNull()
+        }
+    }
+
     // Плашки узнают о режиме e-ink отсюда: без теней, анимаций и полутонов.
     androidx.compose.runtime.CompositionLocalProvider(
         LocalEink provides eink,
         LocalReaderFullscreen provides stored.readerFullscreen,
     ) {
     Box(Modifier.fillMaxSize().readerBackdrop(tones, look)) {
-        if (prefs.readerPaged) {
-            PagedBody(
-                app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
-                tones = tones, look = look, turn = prefs.readerPageTurn,
-                shape = shape, edges = coverEdges, marksAt = marksAt,
-                margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
-                styleFor = ::styleFor, isHeading = isHeading,
-                noIndent = noIndent, smallCaps = prefs.readerSmallCaps,
-                imperfect = prefs.readerImperfect,
-                target = target, onTargetUsed = { target = null },
-                onShown = { start, end -> offset = start; shownEnd = end },
-                onTap = ::tapText,
-                onToggleBars = { bars = !bars },
-                onTaps = { n, root -> selectTaps(n, root) },
-                onLongPress = ::longPress,
-                onLongDrag = ::longDrag,
-                onPicture = { picture = it },
-                ink = ink,
-                keyTurn = keyTurn,
-                instant = eink,
-                taps = prefs.readerTaps,
-            )
-        } else {
-            ScrollBody(
-                app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
-                tones = tones, look = look, shape = shape, edges = coverEdges, marks = marks,
-                margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
-                styleFor = ::styleFor, isHeading = isHeading,
-                bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
-                target = target, onTargetUsed = { target = null },
-                onShown = { start, end -> offset = start; shownEnd = end },
-                onTap = ::tapText,
-                onToggleBars = { bars = !bars },
-                onTaps = { n, root -> selectTaps(n, root) },
-                onLongPress = ::longPress,
-                onLongDrag = ::longDrag,
-                onPicture = { picture = it },
-                ink = ink,
-                keyTurn = keyTurn,
-                taps = prefs.readerTaps,
+        // Перо ловится над телом читалки, но под плашками: их кнопки пером
+        // нажимаются как пальцем.
+        Box(
+            Modifier.fillMaxSize().penInput(
+                enabled = stored.readerPen != Settings.PEN_OFF && !lasso,
+                ink = penInk,
+                onStroke = ::penStroke,
+            ),
+        ) {
+            if (prefs.readerPaged) {
+                PagedBody(
+                    app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
+                    tones = tones, look = look, turn = prefs.readerPageTurn,
+                    shape = shape, edges = coverEdges, marksAt = marksAt,
+                    margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
+                    styleFor = ::styleFor, isHeading = isHeading,
+                    noIndent = noIndent, smallCaps = prefs.readerSmallCaps,
+                    imperfect = prefs.readerImperfect,
+                    target = target, onTargetUsed = { target = null },
+                    onShown = { start, end -> offset = start; shownEnd = end },
+                    onTap = ::tapText,
+                    onToggleBars = { bars = !bars },
+                    onTaps = { n, root -> selectTaps(n, root) },
+                    onLongPress = ::longPress,
+                    onLongDrag = ::longDrag,
+                    onPicture = { picture = it },
+                    ink = ink,
+                    keyTurn = keyTurn,
+                    instant = eink,
+                    taps = prefs.readerTaps,
+                    onCorner = ::toggleBookmark,
+                )
+            } else {
+                ScrollBody(
+                    app = app, bookId = bk.id, blocks = blocks, palette = palette, hits = hits,
+                    tones = tones, look = look, shape = shape, edges = coverEdges, marks = marks,
+                    margins = margins, onChapters = { showChapters = true }, gap = paragraphGap,
+                    styleFor = ::styleFor, isHeading = isHeading,
+                    bars = bars, topBarPx = topBarPx, bottomBarPx = bottomBarPx,
+                    target = target, onTargetUsed = { target = null },
+                    onShown = { start, end -> offset = start; shownEnd = end },
+                    onTap = ::tapText,
+                    onToggleBars = { bars = !bars },
+                    onTaps = { n, root -> selectTaps(n, root) },
+                    onLongPress = ::longPress,
+                    onLongDrag = ::longDrag,
+                    onPicture = { picture = it },
+                    ink = ink,
+                    keyTurn = keyTurn,
+                    taps = prefs.readerTaps,
+                )
+            }
+        }
+        PenInkLayer(penInk, palette.fg)
+
+        // Закладка на странице - ленточкой из верхнего края, у наружного угла;
+        // тап по этому углу её и ставит, и снимает.
+        if (pageMarked && prefs.readerPaged) {
+            androidx.compose.material3.Icon(
+                Glyphs.Bookmark,
+                contentDescription = "Закладка",
+                tint = palette.fg,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = readerTopInset())
+                    .padding(end = maxOf(card.side, 12.dp) + 6.dp)
+                    .offset(y = (-4).dp)
+                    .size(width = 20.dp, height = 30.dp),
             )
         }
 
@@ -887,6 +1099,11 @@ fun ReaderScreen(
                                 fontSize = 10.sp,
                             )
                         }
+                        BarIcon(
+                            if (pageMarked) Glyphs.Bookmark else Glyphs.BookmarkBorder,
+                            if (pageMarked) "Снять закладку" else "Закладка",
+                            palette,
+                        ) { toggleBookmark() }
                         BarIcon(Glyphs.ManageSearch, "Найти по смыслу", palette) { showSearch = true }
                         // «Аа» - всё, как выглядит страница, одним листом (16.11.2026).
                         BarIcon(Glyphs.TextFields, "Вид страницы", palette) { showSettings = true }
@@ -934,18 +1151,11 @@ fun ReaderScreen(
                             onMarker = {
                                 // Маркер без слов - сразу на полях: выделил и отметил,
                                 // мысль можно дописать потом тапом по маркеру.
-                                val now = System.currentTimeMillis()
-                                app.notes.put(
-                                    bk.id,
-                                    ru.zf.slushalka.data.Note(
-                                        id = now, start = sel.first, end = sel.last,
-                                        quote = quoteOf(sel).take(NOTE_QUOTE_MAX), text = "", updatedAt = now,
-                                    ),
-                                )
-                                app.scope.launch { state.syncPush(bk.id) }
+                                markRange(sel)
                                 notice = "Отметил маркером"
                                 selection = null
                             },
+                            onDictionary = { dictWord = quoteOf(sel) },
                             onCopy = {
                                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(quoteOf(sel)))
                                 notice = "Скопировал"
@@ -984,15 +1194,27 @@ fun ReaderScreen(
                                 Spacer(Modifier.width(8.dp))
                                 // Полоску можно тянуть: отпустил - книга там (16.11.2026).
                                 BookProgress(t, offset, palette, Modifier.weight(1f)) { at ->
-                                    place = null
-                                    target = (at * t.length).toInt().coerceIn(0, (t.length - 1).coerceAtLeast(0))
+                                    jumpTo((at * t.length).toInt().coerceIn(0, (t.length - 1).coerceAtLeast(0)))
                                 }
                                 Spacer(Modifier.width(8.dp))
                                 if (stored.readerFullscreen) {
-                                    Text(clock, color = palette.dim, fontSize = 11.sp)
+                                    Text(time, color = palette.dim, fontSize = 11.sp)
                                     Spacer(Modifier.width(6.dp))
                                 }
                                 LoveLine(alpha = 0.3f, size = 10, color = palette.fg)
+                            }
+                            // Сколько осталось - как в любой читалке: страниц до конца
+                            // главы по нынешней странице, минут - по своему темпу.
+                            val left = chapterLeft(t, offset, shownEnd, typicalPage, readCpm)
+                            if (left.isNotEmpty()) {
+                                Text(
+                                    left,
+                                    color = palette.dim,
+                                    fontSize = 11.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(horizontal = 6.dp),
+                                )
                             }
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 if (bk.hasAudio) {
@@ -1122,6 +1344,46 @@ fun ReaderScreen(
             }
         }
 
+        // «Вернуться»: прыгнул по содержанию, полоске, поиску - прежнее место
+        // под рукой; тап - туда, и уже оттуда можно обратно.
+        backTo?.takeIf { !visible(it) }?.let { back ->
+            val lift = with(LocalDensity.current) {
+                if (bottomShown) bottomBarPx.toDp() + 8.dp else readerBottomInset() + if (prefs.readerPaged) 30.dp else 12.dp
+            }
+            Row(
+                Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(bottom = lift, start = maxOf(card.side, BAR_INSET))
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(palette.bg)
+                    .border(if (eink) 1.dp else 0.7.dp, palette.fg.copy(alpha = if (eink) 1f else 0.35f), RoundedCornerShape(20.dp)),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    Modifier
+                        .clickable { jumpTo(back) }
+                        .padding(start = 12.dp, end = 6.dp, top = 7.dp, bottom = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    androidx.compose.material3.Icon(Glyphs.Replay, null, tint = palette.fg, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Вернуться · ${(back * 100L / t.length.coerceAtLeast(1)).toInt()}%",
+                        color = palette.fg,
+                        fontSize = 12.sp,
+                    )
+                }
+                Text(
+                    "✕",
+                    color = palette.dim,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .clickable { backTo = null; landedAt = null }
+                        .padding(start = 6.dp, end = 12.dp, top = 7.dp, bottom = 7.dp),
+                )
+            }
+        }
+
         (notice ?: working ?: busy)?.let { line ->
             Text(
                 line,
@@ -1131,9 +1393,14 @@ fun ReaderScreen(
                     .align(Alignment.BottomCenter)
                     .padding(bottom = with(LocalDensity.current) { if (bottomShown) bottomBarPx.toDp() + 12.dp else 96.dp })
                     .clip(RoundedCornerShape(20.dp))
-                    .background(palette.fg.copy(alpha = 0.88f))
+                    .background(palette.fg.copy(alpha = if (eink) 1f else 0.88f))
                     .padding(horizontal = 14.dp, vertical = 8.dp),
             )
+        }
+
+        // Промывка e-ink: на миг весь экран чёрный, потом белый.
+        if (flash != 0) {
+            Box(Modifier.fillMaxSize().background(if (flash == 1) androidx.compose.ui.graphics.Color.Black else androidx.compose.ui.graphics.Color.White))
         }
     }
     }
@@ -1183,9 +1450,7 @@ fun ReaderScreen(
             title = t.title.ifBlank { bk.title },
             onGo = { n ->
                 showNotes = false
-                place = null
-                target = n.start
-                pendingHighlight = null
+                jumpTo(n.start)
             },
             onEdit = { n -> showNotes = false; editing = n; editingByVoice = false },
             onClose = { showNotes = false },
@@ -1229,6 +1494,19 @@ fun ReaderScreen(
     if (showRate) {
         ReadAloudRateDialog(app, speech.rate) { showRate = false }
     }
+    dictWord?.let { word ->
+        val sel0 = selection
+        DictionarySheet(
+            app = app,
+            word = word,
+            onAskClaude = {
+                val at = sel0?.last ?: readPlace()
+                selection = null
+                onAsk(at, "Что значит «${word.take(80)}» здесь? Коротко: значение и почему так сказано в этом месте.", word)
+            },
+            onClose = { dictWord = null },
+        )
+    }
     if (showSettings) {
         ReaderSettingsDialog(app, onClose = { showSettings = false })
     }
@@ -1263,8 +1541,12 @@ fun ReaderScreen(
             currentOffset = offset,
             onPick = { start ->
                 showChapters = false
-                place = null
-                target = start
+                jumpTo(start)
+            },
+            bookmarks = bookmarks,
+            onDeleteBookmark = { n ->
+                app.notes.remove(bk.id, n.id)
+                app.scope.launch { state.syncPush(bk.id) }
             },
             onClose = { showChapters = false },
         )
@@ -1278,8 +1560,7 @@ fun ReaderScreen(
             onGoChapter = { n ->
                 t.chapters.getOrNull(n - 1)?.let { c ->
                     showGuide = false
-                    place = null
-                    target = c.start
+                    jumpTo(c.start)
                 }
             },
             onClose = { showGuide = false },
@@ -1291,10 +1572,8 @@ fun ReaderScreen(
             cutoffChar = readPlace(),
             onGo = { at, exact ->
                 showRazbor = false
-                place = null
-                target = at
                 // Место найдено по цитате - фраза коротко подсвечивается, как у поиска.
-                if (exact) pendingHighlight = at
+                jumpTo(at, light = exact)
             },
             onClose = { showRazbor = false },
         )
@@ -1309,9 +1588,7 @@ fun ReaderScreen(
             onNeedMic = onNeedMic,
             onGo = { at ->
                 showSearch = false
-                place = null
-                target = at
-                pendingHighlight = at
+                jumpTo(at, light = true)
             },
             onClose = { showSearch = false },
         )
@@ -1382,6 +1659,33 @@ fun ReaderScreen(
 private const val NOTE_QUOTE_MAX = 2000
 
 /**
+ * Вспышка промывки: чёрный держится дольше белого - за это время e-ink
+ * успевает перевернуть все частицы, белый лишь стирает след чёрного.
+ */
+private const val EINK_FLASH_BLACK_MS = 120L
+private const val EINK_FLASH_WHITE_MS = 90L
+
+/**
+ * «До конца главы 7 стр. · ≈12 мин · книга ≈5 ч» - страницы по обычной
+ * странице ([perPage], медиана последних), минуты по темпу из журнала (нет
+ * темпа - без минут). Пусто - ещё не знаем, сколько текста на странице.
+ */
+internal fun chapterLeft(t: BookText, offset: Int, shownEnd: Int, perPage: Int, cpm: Double?): String {
+    if (shownEnd <= offset || t.length == 0 || perPage <= 0) return ""
+    val next = t.chapters.firstOrNull { it.start > offset }?.start ?: t.length
+    val inChapter = (next - shownEnd).coerceAtLeast(0)
+    val pages = (inChapter + perPage - 1) / perPage
+    val parts = mutableListOf<String>()
+    parts += if (pages == 0) "последняя страница главы" else "до конца главы $pages стр."
+    if (cpm != null && cpm > 50) {
+        if (inChapter > 0) parts += "≈" + minutesLabel(inChapter / cpm)
+        val book = (t.length - shownEnd).coerceAtLeast(0)
+        if (book > inChapter) parts += "книга ≈" + minutesLabel(book / cpm)
+    }
+    return parts.joinToString(" · ")
+}
+
+/**
  * Нижняя плашка при выделении: кусок строкой сверху, под ним - что с ним
  * сделать. Спросить и контекст уходят к Claude, пометка остаётся на полях.
  */
@@ -1396,6 +1700,7 @@ private fun ColumnScope.SelectionBar(
     onCopy: () -> Unit,
     onMore: () -> Unit,
     onClear: () -> Unit,
+    onDictionary: () -> Unit,
 ) {
     Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1416,6 +1721,8 @@ private fun ColumnScope.SelectionBar(
         BarAction(Glyphs.Brush, "Маркер", palette, onClick = onMarker)
         BarAction(Glyphs.QuestionAnswer, "Спросить", palette, onClick = onAsk)
         BarAction(Glyphs.TravelExplore, "Контекст", palette, onClick = onContext)
+        // Словарь - как в любой читалке: слово уходит в словарь устройства.
+        BarAction(Glyphs.Translate, "Словарь", palette, onClick = onDictionary)
         BarAction(Glyphs.ContentCopy, "Копия", palette, onClick = onCopy)
         BarAction(Glyphs.FormatQuote, "Ещё", palette, onClick = onMore)
     }

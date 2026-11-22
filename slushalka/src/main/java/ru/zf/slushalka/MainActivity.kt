@@ -102,9 +102,10 @@ class MainActivity : ComponentActivity() {
             val base = LocalDensity.current
             val density = remember(base, prefs.uiScale) { Density(base.density * prefs.uiScale, base.fontScale) }
             CompositionLocalProvider(LocalDensity provides density) {
-                // На простой электронной книге всё приложение - чёрным по
-                // белому, не только читалка; цветная читалка живёт в цвете.
-                SlushalkaTheme(eink = prefs.readerEinkLow) {
+                // На любой электронной книге всё приложение - чёрным по белому,
+                // не только читалка: с 23.11.2026 и на цветной - кремовые
+                // карточки и цветные кнопки на Kaleido выходят растровой мутью.
+                SlushalkaTheme(eink = prefs.readerEink) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.background,

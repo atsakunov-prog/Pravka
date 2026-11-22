@@ -83,8 +83,8 @@ fun ReaderSettingsDialog(app: SlushalkaApp, onClose: () -> Unit) {
         Tabs(listOf("Текст", "Страница", "Бумага", "Тонко"), tab) { tab = it; lastTab = it }
         if (prefs.readerEink) {
             PaperNote(
-                "${Settings.deviceLabel(prefs.readerDevice)}: всегда страницами и без анимаций - " +
-                    "иначе электронная бумага мерцает. Устройство - в настройках.",
+                "${Settings.deviceLabel(prefs.readerDevice)}: страницами, без анимаций и без рисунка бумаги - " +
+                    "на электронной бумаге это мерцание и серая сыпь. Устройство - в настройках.",
                 Modifier.padding(top = 10.dp),
             )
         }
@@ -258,8 +258,33 @@ private fun PageTab(app: SlushalkaApp) {
     Label("Тап по странице")
     ChipRow(Settings.TAPS, prefs.readerTaps, { Settings.tapsLabel(it) }) { scope.launch { s.setReaderTaps(it) } }
     PaperNote(
-        if (prefs.readerTaps == Settings.TAPS_FORWARD) "Одной рукой: назад - левый край, панели - тап у верха, остальное вперёд."
-        else "Края листают, тап посередине - панели.",
+        (if (prefs.readerTaps == Settings.TAPS_FORWARD) "Одной рукой: назад - левый край, панели - тап у верха, остальное вперёд."
+        else "Края листают, тап посередине - панели.") +
+            " Правый верхний угол - закладка." +
+            if (prefs.readerEink) " На читалке край листает сразу, слово у края выделяется долгим нажатием." else "",
+        Modifier.padding(top = 6.dp),
+    )
+
+    if (prefs.readerEink) {
+        Label("Промывка экрана")
+        ChipRow(Settings.EINK_REFRESHES, prefs.readerEinkRefresh, { Settings.einkRefreshLabel(it) }) {
+            scope.launch { s.setReaderEinkRefresh(it) }
+        }
+        PaperNote(
+            "Раз в столько страниц экран мигнёт чёрным и белым и сотрёт тень прежних страниц - " +
+                "без этого белый лист к десятой странице сереет.",
+            Modifier.padding(top = 6.dp),
+        )
+    }
+
+    Label("Перо")
+    ChipRow(Settings.PENS, prefs.readerPen, { Settings.penLabel(it) }) { scope.launch { s.setReaderPen(it) } }
+    PaperNote(
+        when (prefs.readerPen) {
+            Settings.PEN_OFF -> "Перо работает как палец."
+            Settings.PEN_SELECT -> "Провёл пером под строкой или обвёл кусок - выделение, дальше как пальцем: заметка, словарь, вопрос. Ластик или кнопка пера стирают маркер."
+            else -> "Провёл пером под строкой - маркер; обвёл кусок - выделение; черта по полю - строки рядом. Ластик или кнопка пера стирают маркер."
+        },
         Modifier.padding(top = 6.dp),
     )
 
@@ -417,7 +442,7 @@ private fun PaperTab(app: SlushalkaApp) {
             Settings.THEME_TIME -> "Днём бумага, с семи вечера сепия, с десяти - тёплая ночная."
             Settings.THEME_WARM -> "Коричневая бумага и песочные буквы - меньше синего в постели."
             Settings.THEME_AUTO -> "Светлая днём, ночь - когда телефон в тёмной теме."
-            Settings.THEME_EINK, Settings.THEME_EINK_NIGHT -> "Без оттенка - для электронной бумаги."
+            Settings.THEME_EINK, Settings.THEME_EINK_NIGHT -> "Без оттенка - для электронной бумаги: чистый белый и чистый чёрный."
             else -> "Окна читалки - вопрос, справочник, заметки - той же бумагой."
         },
         Modifier.padding(top = 6.dp),
@@ -471,12 +496,15 @@ private fun FineTab(app: SlushalkaApp) {
     val paper = style == Settings.PAGE_PAPER
     val card = style == Settings.PAGE_BOOK || style == Settings.PAGE_SOFT
 
+    val eink = prefs.readerEink
     PaperNote(
-        "Здесь - только то, что есть у вида «${Settings.pageStyleLabel(style)}».",
+        "Здесь - только то, что есть у вида «${Settings.pageStyleLabel(style)}»." +
+            if (eink) " Просвета с оборота, матовости и неровностей печати на читалке нет: " +
+                "на электронной бумаге они - серая сыпь и мутные буквы." else "",
         Modifier.padding(top = 12.dp),
     )
 
-    if (volume || paper) {
+    if ((volume || paper) && !eink) {
         Label("Просвет с оборота")
         PaperToggle("Печать с оборота проступает", prefs.readerBleed, hint = "Зеркально и размыто, как сквозь тонкую бумагу") {
             scope.launch { s.setReaderBleed(it) }
@@ -506,9 +534,9 @@ private fun FineTab(app: SlushalkaApp) {
             scope.launch { s.setReaderTable(it) }
         }
     }
-    if (volume || paper || card) {
+    if ((volume || paper || card) && !(eink && !card)) {
         Label("Бумага на ощупь")
-        PaperToggle("Матовость: зерно и волокна", prefs.readerGrain) { scope.launch { s.setReaderGrain(it) } }
+        if (!eink) PaperToggle("Матовость: зерно и волокна", prefs.readerGrain) { scope.launch { s.setReaderGrain(it) } }
         if (card) {
             PaperToggle("Фаска по кромке", prefs.readerBevel) { scope.launch { s.setReaderBevel(it) } }
             PaperToggle("Блик и затенение", prefs.readerSheen) { scope.launch { s.setReaderSheen(it) } }
@@ -530,7 +558,7 @@ private fun FineTab(app: SlushalkaApp) {
     PaperToggle("Типограф", prefs.readerTypograph, hint = "Тире вместо дефиса, неразрывный пробел после коротких слов") {
         scope.launch { s.setReaderTypograph(it) }
     }
-    PaperToggle("Неровности печати", prefs.readerImperfect, hint = "Полоса чуть перекошена, краска берётся волокнами") {
+    if (!eink) PaperToggle("Неровности печати", prefs.readerImperfect, hint = "Полоса чуть перекошена, краска берётся волокнами") {
         scope.launch { s.setReaderImperfect(it) }
     }
 }

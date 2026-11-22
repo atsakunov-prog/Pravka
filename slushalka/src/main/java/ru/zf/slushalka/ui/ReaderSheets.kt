@@ -53,20 +53,82 @@ fun ContentsSheet(
     text: BookText,
     currentOffset: Int,
     onPick: (charOffset: Int) -> Unit,
+    /** Закладки книги (23.11.2026): вторая вкладка, как в любой читалке. */
+    bookmarks: List<ru.zf.slushalka.data.Note> = emptyList(),
+    onDeleteBookmark: (ru.zf.slushalka.data.Note) -> Unit = {},
     onClose: () -> Unit,
 ) {
     val here = text.chapterIndexAt(currentOffset)
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = (here - 2).coerceAtLeast(0))
     val c = MaterialTheme.colorScheme
+    var marksTab by remember { mutableStateOf(false) }
     PaperSheet(
         app = app,
         onClose = onClose,
         icon = Glyphs.Toc,
         title = "Содержание",
         subtitle = text.title.takeIf { it.isNotBlank() }?.let { "$it · ${text.chapters.size} гл." },
-        tall = text.chapters.size > 10,
+        tall = text.chapters.size > 10 || bookmarks.size > 8,
         scroll = false,
     ) {
+        Row(Modifier.padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            PaperChip("Главы", selected = !marksTab, icon = Glyphs.Toc) { marksTab = false }
+            PaperChip(
+                if (bookmarks.isEmpty()) "Закладки" else "Закладки · ${bookmarks.size}",
+                selected = marksTab,
+                icon = Glyphs.Bookmark,
+            ) { marksTab = true }
+        }
+        if (marksTab) {
+            if (bookmarks.isEmpty()) {
+                PaperNote(
+                    "Закладок пока нет. Поставить - тап в правый верхний угол страницы или значок закладки в верхней плашке.",
+                    Modifier.padding(vertical = 10.dp),
+                )
+                return@PaperSheet
+            }
+            LazyColumn(
+                Modifier.fillMaxWidth().then(if (bookmarks.size > 8) Modifier.weight(1f) else Modifier.heightIn(max = 520.dp)),
+            ) {
+                itemsIndexed(bookmarks) { _, n ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onPick(n.start) }
+                            .padding(vertical = 10.dp, horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            val chapter = text.chapterAt(n.start)?.title?.takeIf { it.isNotBlank() }
+                            val share = (n.start * 100L / text.length.coerceAtLeast(1)).toInt()
+                            Text(
+                                listOfNotNull(chapter, "$share%").joinToString(" · "),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = c.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                n.quote.ifBlank { "Страница ${text.pageOf(n.start)}" },
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = fontOf(Settings.FONT_BOOK)),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            "✕",
+                            color = c.onSurfaceVariant,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onDeleteBookmark(n) }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+            }
+            return@PaperSheet
+        }
         LazyColumn(
             Modifier.fillMaxWidth().then(if (text.chapters.size > 10) Modifier.weight(1f) else Modifier.heightIn(max = 520.dp)),
             state = listState,

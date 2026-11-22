@@ -1557,6 +1557,30 @@ object Glyphs {
         }
     }
 
+    /** Закладка контуром: страница без закладки. */
+    val BookmarkBorder: ImageVector by lazy {
+        materialIcon(name = "Glyphs.BookmarkBorder") {
+            materialPath {
+                moveTo(17.0f, 3.0f)
+                horizontalLineTo(7.0f)
+                curveToRelative(-1.1f, 0.0f, -1.99f, 0.9f, -1.99f, 2.0f)
+                lineTo(5.0f, 21.0f)
+                lineToRelative(7.0f, -3.0f)
+                lineToRelative(7.0f, 3.0f)
+                verticalLineTo(5.0f)
+                curveToRelative(0.0f, -1.1f, -0.9f, -2.0f, -2.0f, -2.0f)
+                close()
+                moveTo(17.0f, 18.0f)
+                lineToRelative(-5.0f, -2.18f)
+                lineTo(7.0f, 18.0f)
+                verticalLineTo(5.0f)
+                horizontalLineToRelative(10.0f)
+                verticalLineToRelative(13.0f)
+                close()
+            }
+        }
+    }
+
     val ChevronRight: ImageVector by lazy {
         materialIcon(name = "Glyphs.ChevronRight") {
             materialPath {

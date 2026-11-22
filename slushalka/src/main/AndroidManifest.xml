@@ -28,6 +28,19 @@
         <!-- «Открыть Jellyfin» из панели «Кино» (OpenAppActivity): без этого Android 11+ не покажет, что
              Jellyfin установлен, и пересадка всегда уходила бы в браузер. -->
         <package android:name="org.jellyfin.mobile" />
+        <!-- «Словарь» у выделенного слова (ReaderDict.kt): словари и переводчики
+             принимают слово «Обработать текст» или старым API ColorDict. -->
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT" />
+            <data android:mimeType="text/plain" />
+        </intent>
+        <intent>
+            <action android:name="colordict.intent.action.SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application

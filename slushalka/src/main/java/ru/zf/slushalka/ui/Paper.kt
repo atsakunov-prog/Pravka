@@ -169,7 +169,7 @@ private fun paperType(): Typography {
 fun PaperTheme(app: SlushalkaApp, content: @Composable () -> Unit) {
     val stored by app.state.prefs.collectAsState()
     val palette = readerPalette(stored.readerView().readerTheme, isSystemInDarkTheme())
-    val scheme = remember(palette, stored.readerEinkLow) { paperScheme(palette, stored.readerEinkLow) }
+    val scheme = remember(palette, stored.readerEink) { paperScheme(palette, stored.readerEink) }
     val type = remember { paperType() }
     MaterialTheme(colorScheme = scheme, typography = type, shapes = MaterialTheme.shapes) {
         CompositionLocalProvider(LocalEink provides stored.readerEink, LocalPaper provides palette) {
@@ -216,7 +216,9 @@ fun PaperSheet(
         ModalBottomSheet(
             onDismissRequest = onClose,
             sheetState = sheet,
-            scrimColor = if (seeThrough) Color.Transparent else androidx.compose.material3.BottomSheetDefaults.ScrimColor,
+            // На электронной бумаге затемнения нет: серая заливка во весь экран
+            // там растр и тень на следующей странице, а лист и так в рамке.
+            scrimColor = if (seeThrough || eink) Color.Transparent else androidx.compose.material3.BottomSheetDefaults.ScrimColor,
             // Лист «прыгал» вверх-вниз, когда список доезжал до низа (08.10.2026,
             // «Разбор»). Материал отступает от строки состояния на столько, на
             // сколько лист до неё не доехал, - высота листа зависела от того, где
@@ -225,7 +227,11 @@ fun PaperSheet(
             // а с ней и точка «развёрнут» - и пружина начиналась заново с той же
             // скоростью вверх. Поэтому отступа сверху у листа нет, а его потолок
             // меряется снаружи, в окне приложения: не выше строки состояния.
-            modifier = Modifier.maxHeightPx(ceiling),
+            modifier = Modifier.maxHeightPx(ceiling).then(
+                // Без затемнения на e-ink лист отделён от страницы рамкой.
+                if (eink) Modifier.border(1.5.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp))
+                else Modifier,
+            ),
             contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom) },
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
