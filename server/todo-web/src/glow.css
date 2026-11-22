@@ -323,3 +323,8 @@
 .pd-row svg { color: var(--ok); flex: none; }
 :root[data-theme="dark"] .plan-did { border-color: var(--glass-line); background: radial-gradient(100% 60% at 0% 0%, rgba(143, 209, 168, .08), transparent 70%); }
 :root[data-theme="dark"] .plan-did .plan-bh { text-shadow: 0 0 14px rgba(143, 209, 168, .4); }
+.kr-top { display: flex; align-items: center; gap: 4px; }
+.kr-top .kr-ch { flex: 1; min-width: 0; }
+.kr-add { color: var(--dc); opacity: .55; }
+.kr-card:hover .kr-add, .kr-add:focus-visible { opacity: 1; }
+@media (max-width: 750px) { .kr-add { opacity: 1; } }

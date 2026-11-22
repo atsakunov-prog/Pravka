@@ -11,7 +11,7 @@ import type { Id, Project, Task } from '../types.ts';
 import { byPos, goalChildren, goalDir, goals, isListed, mine, smart, whyPath } from '../views.ts';
 import { Icon } from './icons.tsx';
 import { openPop } from './pop.tsx';
-import { openTask } from './state.ts';
+import { openQuick, openTask } from './state.ts';
 import { draggingId, setDragId, TaskList } from './TaskList.tsx';
 import { Checkbox } from './TaskRow.tsx';
 import { Empty, Page } from './Views.tsx';
@@ -115,11 +115,14 @@ function DirCard({ k }: { k: string }) {
   const today = ts.filter((t) => t.focus_on === S.today || (t.due_date && t.due_date <= S.today)).length;
   return (
     <section className={'kr-card' + (drop.over ? ' drop' : '')} style={{ '--dc': dirColor(k) } as React.CSSProperties} {...drop.props}>
-      <a className="kr-ch" href={'#/dir/' + k}>
-        <DirDot k={k} size={10} />
-        <span className="kr-name">{dirFull(k)}</span>
-        <span className="kr-n">{ts.length || ''}</span>
-      </a>
+      <div className="kr-top">
+        <a className="kr-ch" href={'#/dir/' + k}>
+          <DirDot k={k} size={10} />
+          <span className="kr-name">{dirFull(k)}</span>
+          <span className="kr-n">{ts.length || ''}</span>
+        </a>
+        <button className="icon-btn sm kr-add" title={'Записать в «' + dirShort(k) + '»'} onClick={() => openQuick({ directions: [k] })}><Icon name="plus" size={16} /></button>
+      </div>
       {d.formula ? <div className="kr-f">{String(d.formula)}</div> : null}
       <div className="kr-stats">
         {top.length ? <span><Icon name="target" size={12} />{plural(top.length, 'цель', 'цели', 'целей')}</span> : null}
