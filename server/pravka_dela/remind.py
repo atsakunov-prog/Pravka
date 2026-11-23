@@ -201,7 +201,7 @@ SELECT t.id AS task_id, t.num, t.owner_id AS "user", u.telegram_id, t.title,
        p.name AS project, coalesce(pe.short, pe.name) AS person,
        t.due_date, t.due_time, t.remind_at, t.remind_place,
        greatest(0, floor(extract(epoch FROM now() - t.remind_at) / 60))::int AS late_min,
-       t.kind, """ + PHONE_ON + """ AS phone
+       t.kind, t.notes, t.labels, """ + PHONE_ON + """ AS phone
 FROM tasks.tasks t
 JOIN crm.users u ON u.id = t.owner_id
 LEFT JOIN crm.projects p ON p.id = t.project_id
@@ -220,6 +220,53 @@ LIMIT %(limit)s
 """
 
 
+# «Под рукой в моменте» (23.11.2026; владелец: «чтобы всё было под рукой — когда еду на машине, когда на велике, когда
+# зашёл за печатью»). Напоминание несёт не только заголовок: первую строку заметки («выехать с дачи не позже 11:15»),
+# дела внутри (вопросы к встрече — «спросить про сделку») и дела с той же меткой без своего часа — метка-место
+# («машина»): блок «Дача: выехать» с меткой «машина» напоминает и «в машине можно: позвонить, назначить
+# встречу клиенту, подумать про финансирование». В машине Telegram читает это вслух (Android Auto), на велике — видно на часах.
+# «Внутри» и «Зачем» — одно поле tasks.krug.why_id (дело внутри дела или цель дерева); у дела-цели внутри — шаги к ней,
+# не повестка, поэтому у цели (krug.goal) списка «внутри» нет.
+INSIDE = ("SELECT t.num, t.title FROM tasks.krug k JOIN tasks.tasks t ON t.id = k.id "
+          "WHERE k.why_id = %s AND t.status = 'open' "
+          "AND NOT EXISTS (SELECT 1 FROM tasks.krug g WHERE g.id = %s AND g.goal) "
+          "ORDER BY t.pos NULLS LAST, t.num LIMIT 8")
+ALONG = ("SELECT t.num, t.title, l AS label FROM tasks.tasks t CROSS JOIN LATERAL unnest(t.labels) l "
+         "LEFT JOIN tasks.krug k ON k.id = t.id "
+         "WHERE t.owner_id = %s AND t.status = 'open' AND t.id <> %s AND t.due_time IS NULL "
+         "AND NOT coalesce(k.goal, false) AND k.why_id IS DISTINCT FROM %s "
+         "AND l = ANY(%s) AND (t.due_date IS NULL OR t.due_date <= %s) "
+         "ORDER BY t.due_date NULLS LAST, t.num LIMIT 12")
+ALONG_MAX = 6
+
+
+def _note(notes) -> str:
+    """Первая непустая строка заметки, без строки-места автопилота (её смысл — само напоминание)."""
+    for line in str(notes or "").splitlines():
+        line = " ".join(line.split())
+        if line and not line.startswith("⏰"):
+            return line[:200]
+    return ""
+
+
+def _extras(conn, r: dict, today: dt.date) -> None:
+    """Заметка, дела внутри и «заодно» по меткам — в строку напоминания (поля note, inside, along)."""
+    r["note"] = _note(r.pop("notes", None))
+    labels = [x for x in (r.pop("labels", None) or []) if x]
+    r["inside"] = [{"num": k["num"], "title": k["title"]} for k in conn.execute(INSIDE, (r["task_id"], r["task_id"])).fetchall()]
+    along: dict[str, list[dict]] = {}
+    if labels:
+        at = r.get("remind_at")
+        day = at.astimezone(MSK).date() if isinstance(at, dt.datetime) else today
+        seen: set[int] = set()
+        for k in conn.execute(ALONG, (r["user"], r["task_id"], r["task_id"], labels, day)).fetchall():
+            if k["num"] in seen or len(along.get(k["label"], [])) >= ALONG_MAX:
+                continue
+            seen.add(k["num"])
+            along.setdefault(k["label"], []).append({"num": k["num"], "title": k["title"]})
+    r["along"] = [{"label": lb, "tasks": ts} for lb, ts in along.items()]
+
+
 def due(url: str, public_url: str = "") -> dict:
     """Что пора отправить: открытые дела с remind_at <= now(), не отправленные, у владельцев с
     telegram_id. Читает system (бот напоминает всем, у кого есть Telegram), журнал — от имени бота."""
@@ -227,12 +274,13 @@ def due(url: str, public_url: str = "") -> dict:
     # Без неё ссылка остаётся относительной — бот всё равно пришлёт дело, только без перехода.
     base = (public_url or "").rstrip("/")
     with db.session(url, "system", ACTOR, BOT) as conn:
-        rows = conn.execute(DUE, {"bot": ACTOR, "limit": LIMIT, "grace": PHONE_GRACE_MIN}).fetchall()
+        rows = [dict(r) for r in conn.execute(DUE, {"bot": ACTOR, "limit": LIMIT, "grace": PHONE_GRACE_MIN}).fetchall()]
         at = conn.execute("SELECT now() AS n").fetchone()["n"]
-    today = at.astimezone(MSK).date()
+        today = at.astimezone(MSK).date()
+        for r in rows:
+            _extras(conn, r, today)
     out = []
     for r in rows:
-        r = dict(r)
         r["url"] = f"{base}/#task/{r['num']}"
         # Подпись времени — одна на всех (06.10.2026): бот печатал её своей копией и писал «09.10»
         # там, где телефон и веб — «чт 09:00». Теперь бот берёт готовое.

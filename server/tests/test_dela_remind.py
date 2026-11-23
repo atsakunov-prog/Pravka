@@ -100,6 +100,35 @@ def test_due_only_open_unsent_past_with_telegram(dela):
     assert set(CONTRACT["reminders_due"]["response"]["reminders"][0]) <= set(r)
 
 
+def test_due_carries_note_inside_and_along(dela):
+    """«Под рукой в моменте» (23.11.2026): блок дороги несёт заметку, дела внутри и дела с той же меткой без часа."""
+    telegram(dela, "sasha", 111)
+    mk = lambda title, **kw: ops(dela, "sasha", {"op": "task.create", "task": {"title": title, **kw}})[0]["task"]  # noqa: E731
+    day = remind.now().date().isoformat()
+    drive = mk("Дача: выехать", due_date=day, due_time="09:00", estimate_min=75, labels=["машина"],
+               notes="⏰ Напомнить, когда приеду: дача\nОбратно выехать не позже 11:15.\nвторая строка", remind_at=ago(1))
+    meet = mk("Встреча с фондом", due_date=day, due_time="17:00", remind_at=ago(2))
+    q1 = mk("Спросить про сделку", why_id=meet["id"])
+    q2 = mk("Спросить про договор", why_id=meet["id"])
+    call = mk("Позвонить Ивану", due_date=day, labels=["машина"])
+    think = mk("Подумать про финансирование", labels=["машина"])
+    mk("Через неделю", due_date=(remind.now().date() + dt.timedelta(days=7)).isoformat(), labels=["машина"])
+    mk("Со своим часом", due_date=day, due_time="15:00", labels=["машина"])
+    done = mk("Уже сделано", labels=["машина"])
+    ops(dela, "sasha", {"op": "task.done", "id": done["id"]})
+    ops(dela, "natasha", {"op": "task.create", "task": {"title": "Чужое", "labels": ["машина"]}})
+    got = {r["num"]: r for r in remind.due(dela, "https://dela.example")["reminders"]}
+    d = got[drive["num"]]
+    assert d["note"] == "Обратно выехать не позже 11:15." and d["inside"] == []
+    assert d["along"] == [{"label": "машина", "tasks": [{"num": call["num"], "title": "Позвонить Ивану"},
+                                                         {"num": think["num"], "title": "Подумать про финансирование"}]}]
+    m = got[meet["num"]]
+    assert [x["title"] for x in m["inside"]] == ["Спросить про сделку", "Спросить про договор"] and m["along"] == [] and m["note"] == ""
+    assert {q1["num"], q2["num"]} == {x["num"] for x in m["inside"]}
+    assert "notes" not in d and "labels" not in d
+    assert set(CONTRACT["reminders_due"]["response"]["reminders"][0]) <= set(d)
+
+
 def test_marianna_gets_only_reminders_she_set_herself(dela):
     """Правило 6: Марианне (reminders: false) — только её собственные напоминания."""
     telegram(dela, "marianna", 222)
