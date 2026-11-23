@@ -332,3 +332,104 @@
   color: var(--accent-text); border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); }
 .place-btn:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 :root[data-theme="dark"] .place-btn { box-shadow: 0 0 12px -4px color-mix(in srgb, var(--accent) 50%, transparent); }
+
+/* ── Календарь Google рядом с делами (23.11.2026, cal.ts, Events.tsx) ──────────────────────────────────────── */
+/* Встреча — не задача: без кружка, время слева, полоска цвета календаря; «Войти» — сразу в созвон. */
+.evs { --ec: #63d2e8; display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px; }
+.ev-row { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 4px 8px 4px 4px; border-radius: 8px; cursor: pointer; }
+.ev-row:hover { background: var(--menu-h); }
+.ev-time { flex: none; width: 92px; font-size: 12.5px; color: var(--fg2); font-variant-numeric: tabular-nums; text-align: right; }
+.ev-bar { flex: none; align-self: stretch; width: 3px; border-radius: 2px; background: var(--ec); margin: 3px 0; }
+.ev-body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ev-ttl { font-size: 14px; line-height: 19px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-loc { font-size: 11.5px; color: var(--fg3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-join { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 13px; font-size: 12.5px; font-weight: 600;
+  color: var(--ec, #63d2e8); border: 1px solid color-mix(in srgb, var(--ec, #63d2e8) 45%, var(--border)); }
+.ev-join:hover { background: color-mix(in srgb, var(--ec, #63d2e8) 12%, transparent); }
+.ev-row.past { opacity: .5; }
+.ev-row.live .ev-ttl { font-weight: 600; }
+.ev-row.live .ev-bar { box-shadow: 0 0 10px var(--ec); }
+.ev-row.free .ev-bar { background: transparent; border: 1px dashed var(--ec); width: 1px; }
+.ev-fold { display: flex; align-items: center; gap: 6px; padding: 2px 8px 2px 106px; font-size: 12px; color: var(--fg3); }
+.cal-stale { display: flex; align-items: center; gap: 6px; margin: 4px 0; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; color: var(--d-tom, #e0a040);
+  background: color-mix(in srgb, var(--d-tom, #e0a040) 10%, transparent); }
+.nudge.n-cal { --nc: #63d2e8; --ec: #63d2e8; cursor: pointer; }
+.nudges .nudge.n-cal { grid-column: 1 / -1; }
+.nudge.n-cal b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nudge.n-cal.live { border-color: color-mix(in srgb, var(--nc) 55%, var(--border)); }
+:root[data-theme="light"] .evs, :root[data-theme="light"] .nudge.n-cal { --ec: #1f8aa3; --nc: #1f8aa3; }
+:root[data-theme="dark"] .ev-row.live { background: radial-gradient(90% 140% at 0% 50%, color-mix(in srgb, var(--ec) 13%, transparent), transparent 70%); }
+:root[data-theme="dark"] .ev-row.live .ev-ttl { text-shadow: 0 0 14px color-mix(in srgb, var(--ec) 45%, transparent); }
+:root[data-theme="dark"] .ev-join { box-shadow: 0 0 12px -5px var(--ec, #63d2e8); }
+@media (max-width: 750px) {
+  .ev-time { width: 74px; font-size: 12px; }
+  .ev-fold { padding-left: 88px; }
+}
+
+/* «Список | Календарь» у «Предстоящего», режимы сетки */
+.segs.up-lay { margin: 0; }
+.segs.up-lay .seg { height: 28px; padding: 0 10px; }
+.cal-bar { gap: 8px; flex-wrap: wrap; height: auto; min-height: 40px; }
+.cal-modes { margin: 0; }
+.cal-modes .seg { height: 26px; padding: 0 10px; font-size: 12.5px; }
+
+/* Сетка: встречи — контуром цвета календаря, задачи — как были; куда ляжет брошенная — пунктир с временем */
+.calw-block, .cal-chip { cursor: pointer; }
+.calw-block[draggable="true"], .cal-chip[draggable="true"] { cursor: grab; }
+.calw-block.ev, .cal-chip.ev { --ec: #63d2e8; background: color-mix(in srgb, var(--ec) 14%, var(--bg2)); border: 1px solid color-mix(in srgb, var(--ec) 45%, transparent);
+  border-left: 3px solid var(--ec); }
+.calw-block.ev.free, .cal-chip.ev.free { background: transparent; border-style: dashed; }
+.calw-block.ev.past { opacity: .5; }
+:root[data-theme="light"] .calw-block.ev, :root[data-theme="light"] .cal-chip.ev { --ec: #1f8aa3; }
+.calw-block .ev-go { position: absolute; right: 3px; top: 2px; width: 20px; height: 20px; border-radius: 10px; display: grid; place-items: center; color: var(--ec);
+  background: color-mix(in srgb, var(--ec) 18%, var(--bg)); }
+.calw-rs { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; touch-action: none; }
+.calw-rs::after { content: ""; position: absolute; left: 50%; bottom: 2px; width: 18px; height: 3px; margin-left: -9px; border-radius: 2px; background: var(--fg3); opacity: 0; }
+.calw-block:hover .calw-rs::after, .calw-block.rs .calw-rs::after { opacity: .7; }
+.calw-block.rs { z-index: 4; box-shadow: 0 0 0 2px var(--accent); }
+.calw-drop { position: absolute; left: 2px; right: 2px; z-index: 5; pointer-events: none; border: 2px dashed var(--accent); border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); font-size: 11.5px; font-weight: 700; font-style: normal; color: var(--accent-text); padding: 1px 6px; }
+.calw-col.drop { background-color: color-mix(in srgb, var(--accent) 5%, transparent); }
+.calw-ad.drop, .calm-cell.drop { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); }
+:root[data-theme="dark"] .calw-block.ev { box-shadow: 0 0 16px -8px var(--ec); }
+:root[data-theme="dark"] .calw-drop { box-shadow: 0 0 18px -4px color-mix(in srgb, var(--accent) 60%, transparent); }
+
+/* Лоток «Разложить по часам» сбоку сетки; на телефоне — полосой над ней */
+.cal-wrap { display: block; }
+.cal-view.with-tray .cal-wrap { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 12px; align-items: start; }
+.cal-tray { position: sticky; top: 56px; max-height: calc(100vh - 140px); overflow-y: auto; padding: 8px; border-radius: 12px; border: 1px solid var(--border); background: var(--raised); }
+.tray-h { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--fg2); text-transform: uppercase; letter-spacing: .04em; padding: 2px 4px 8px; }
+.tray-g + .tray-g { margin-top: 10px; }
+.tray-t { display: flex; justify-content: space-between; font-size: 12px; color: var(--fg3); padding: 0 4px 4px; }
+.tray-i { display: flex; align-items: center; gap: 6px; font-size: 12.5px; line-height: 17px; padding: 6px 8px; margin-bottom: 4px; border-radius: 8px; cursor: grab;
+  background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--border); overflow: hidden; }
+.tray-i:hover { background: var(--menu-h); }
+.tray-i .d { margin-left: auto; flex: none; font-size: 11px; color: var(--fg3); }
+.tray-empty { font-size: 12.5px; color: var(--fg3); padding: 4px; line-height: 18px; }
+:root[data-theme="dark"] .cal-tray { background: rgba(27, 25, 22, .7); border-color: var(--glass-line); }
+:root[data-theme="dark"] .tray-i { background: rgba(255, 240, 220, .04); border-color: var(--glass-line); }
+@media (max-width: 750px) {
+  .cal-view.with-tray .cal-wrap { display: block; }
+  .cal-tray { position: static; max-height: none; display: flex; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 6px; margin-bottom: 8px; }
+  .tray-h { display: none; }
+  .tray-g { display: contents; }
+  .tray-t { display: none; }
+  .tray-i { flex: none; max-width: 70vw; margin: 0; white-space: nowrap; }
+  .tray-empty { white-space: nowrap; }
+}
+
+/* ── Перетаскивание пальцем (touchdrag.ts) ─────────────────────────────────────────────────────────────────── */
+.tdrag-ghost { border-radius: 10px; background: var(--raised) !important; box-shadow: 0 14px 34px -8px rgba(0, 0, 0, .5), 0 0 0 1px var(--accent) !important;
+  opacity: .9; list-style: none; transition: none !important; }
+:root[data-theme="dark"] .tdrag-ghost { box-shadow: 0 14px 34px -8px rgba(0, 0, 0, .7), 0 0 22px -6px var(--accent), 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent) !important; }
+.tdrag-src { opacity: .35; }
+html.tdragging, html.tdragging * { -webkit-user-select: none; user-select: none; }
+@media (pointer: coarse) {
+  [draggable="true"] { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+@media (max-width: 750px) {
+  .bottom-nav a.drop { color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 12px; }
+  .bottom-nav a.springing { animation: kv-spring .65s ease-out; }
+}
+@keyframes kv-spring { from { box-shadow: inset 0 -3px 0 0 transparent; } to { box-shadow: inset 0 -3px 0 0 var(--accent); } }
+:root[data-theme="dark"] .bottom-nav a.drop { text-shadow: var(--fl-text); }

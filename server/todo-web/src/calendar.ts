@@ -1,7 +1,9 @@
 // Календарь как у Todoist (замер 19.10, окно 1400×900): режимы 3 дня / неделя / месяц, ряд «Весь день» для дел без
 // времени, час — 68 пкс, дела со временем — блоками по времени, высота — длительность; будущие разы повторов. Без React:
-// какие дни видны, что в какой день и где стоит блок.
+// какие дни видны, что в какой день и где стоит блок. С 23.11.2026 — ещё и встречи календаря Google (calev.ts) рядом с
+// делами и куда легла брошенная на сетку задача (slotAt: по 15 минут).
 
+import { eventsOn, minHm, spanOn, type CalEvent } from './calev.ts';
 import { addDays, addMonths, daysInMonth, mondayOf, ymd } from './dates.ts';
 import { occurrences } from './schedule.ts';
 import type { Task } from './types.ts';
@@ -28,7 +30,8 @@ export function shiftAnchor(mode: CalMode, anchor: string, dir: 1 | -1): string 
 }
 
 export interface CalItem {
-  task: Task;
+  task: Task | null; // дело; у встречи календаря — null
+  ev?: CalEvent; // встреча календаря Google
   day: string;
   time: string | null; // ЧЧ:ММ; нет — в ряд «Весь день»
   mins: number; // длительность
@@ -49,6 +52,33 @@ export function calItems(tasks: Task[], days: string[], opts: { repeats?: boolea
     }
   }
   return out;
+}
+
+/** Встречи календаря в видимых днях: со временем — блоком (кусок дня, не меньше 15 минут), «весь день» и середина
+ *  долгого — в ряд «Весь день». Близнецы открытых дел не рисуются (их дело и так на сетке). */
+export function evItems(events: CalEvent[], days: string[], tasks?: Map<string, { status: string }>): CalItem[] {
+  const out: CalItem[] = [];
+  for (const day of days) {
+    for (const e of eventsOn(day, events, tasks)) {
+      const s = spanOn(e, day);
+      out.push({ task: null, ev: e, day, time: s ? minHm(s.from) : null, mins: s ? Math.max(s.to - s.from, 15) : 30, ghost: false });
+    }
+  }
+  return out;
+}
+
+export const itemKey = (x: CalItem) => (x.ev ? `ev:${x.ev.id}:${x.day}` : x.task!.id + (x.ghost ? ':' + x.day : ''));
+export const itemTitle = (x: CalItem) => (x.ev ? x.ev.title : x.task!.title);
+
+/** Куда легла задача, брошенная на сетку дня: y — пкс от начала суток (верх блока), шаг — 15 минут, в пределах суток. */
+export function slotAt(y: number): string {
+  const m = Math.round(((y / HOUR) * 60) / 15) * 15;
+  return minHm(Math.max(0, Math.min(23 * 60 + 45, m)));
+}
+
+/** Новая длительность при растягивании блока: dy пкс к прежней, шаг — 15 минут, не меньше 15 и не больше 12 часов. */
+export function resized(mins: number, dy: number): number {
+  return Math.max(15, Math.min(720, Math.round((mins + (dy / HOUR) * 60) / 15) * 15));
 }
 
 export interface Block {

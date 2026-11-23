@@ -1,7 +1,7 @@
 // Календарь как у Todoist: дни режимов, дела по дням, будущие повторы, блоки по времени — node --experimental-strip-types --test.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { calDays, calItems, dayBlocks, HOUR, nowTop, shiftAnchor } from './calendar.ts';
+import { calDays, calItems, dayBlocks, evItems, HOUR, itemKey, nowTop, resized, shiftAnchor, slotAt } from './calendar.ts';
 import type { Task } from './types.ts';
 
 const WED = '2026-10-21';
@@ -47,4 +47,33 @@ test('блоки по времени: час 68 пкс, длительность
   assert.equal(at('11:00').height, 17); // меньше 15 мин не бывает
   assert.equal(dayBlocks([{ task: T({}), day: WED, time: null, mins: 30, ghost: false }]).length, 0); // без времени — в «Весь день»
   assert.equal(nowTop('12:30'), 12.5 * 68);
+});
+
+test('встречи календаря на сетке: блок со временем, «весь день», близнец дела не рисуется (23.11.2026)', () => {
+  const ev = (id: string, p: object) => ({ id, title: id, all_day: false, day: WED, last_day: WED, start: null, end: null, end_day: null, mins: null,
+    location: '', link: '', url: '', task_id: null, busy: true, ...p });
+  const days = calDays('3d', WED);
+  const items = evItems([
+    ev('call', { start: '15:00', end: '15:45', end_day: WED }),
+    ev('trip', { all_day: true, day: '2026-10-22', last_day: '2026-10-23' }),
+    ev('mine', { start: '12:00', end: '12:30', end_day: WED, task_id: 't1' }),
+  ], days, new Map([['t1', { status: 'open' }]]));
+  assert.deepEqual(items.map((x) => [x.ev!.id, x.day, x.time, x.mins]), [
+    ['call', WED, '15:00', 45], ['trip', '2026-10-22', null, 30], ['trip', '2026-10-23', null, 30]]);
+  assert.equal(itemKey(items[1]), 'ev:trip:2026-10-22');
+  assert.equal(items[0].task, null);
+  // Встречи и дела делят дорожки: пересеклись — рядом.
+  const b = dayBlocks([items[0], { task: T({}), day: WED, time: '15:30', mins: 30, ghost: false }]);
+  assert.deepEqual(b.map((x) => x.lanes), [2, 2]);
+});
+
+test('куда легла брошенная задача и растягивание: по 15 минут, в пределах суток', () => {
+  assert.equal(slotAt(9 * HOUR), '09:00');
+  assert.equal(slotAt(9 * HOUR + HOUR * 0.3), '09:15'); // 18 минут — к 15
+  assert.equal(slotAt(-40), '00:00');
+  assert.equal(slotAt(25 * HOUR), '23:45');
+  assert.equal(resized(30, HOUR), 90);
+  assert.equal(resized(30, -HOUR), 15);
+  assert.equal(resized(60, HOUR * 0.2), 75); // 12 минут — к 15
+  assert.equal(resized(600, 10 * HOUR), 720);
 });

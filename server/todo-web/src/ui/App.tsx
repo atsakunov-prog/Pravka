@@ -1,7 +1,7 @@
 // Каркас: боковая панель и вид, окна поверх, тосты, горячие клавиши Todoist, на телефоне — нижняя панель и «+».
 import { useEffect, useState } from 'react';
 import { api } from '../api.ts';
-import { go, projectColor, useMobile, useRoute } from '../lib.ts';
+import { cls, go, projectColor, useMobile, useRoute } from '../lib.ts';
 import { boot, completeSoon, dropToast, emit, refresh, S, saveNow, setTask, syncSoon, toasts, useStore } from '../store.ts';
 import { LabelPicker, PriorityMenu, ProjectPicker, Scheduler } from './pickers.tsx';
 import { TaskMenu } from './TaskMenu.tsx';
@@ -32,6 +32,9 @@ import { BallView } from './Ball.tsx';
 import { NewView } from './Bell.tsx';
 import { PlanView } from './Plan.tsx';
 import { WeekView } from './Week.tsx';
+import { startCal } from '../cal.ts';
+import { install as installTouchDrag } from '../touchdrag.ts';
+import { draggingId } from './TaskList.tsx';
 
 function Toasts() {
   useStore();
@@ -131,6 +134,22 @@ function SearchModal({ close }: { close: () => void }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Вкладка нижней панели телефона (23.11.2026): брось задачу на «Сейчас», «Сегодня» или «Входящие» — как на пункт
+ *  боковой панели; задержи палец на «Круге» или «Обзоре» — вид откроется (data-spring, touchdrag.ts), бросай туда. */
+function NavTab({ view, on, icon, label, onTask, spring }: {
+  view: string; on: boolean; icon: React.ReactNode; label: string; onTask?: (t: Task) => void; spring?: boolean;
+}) {
+  const [over, setOver] = useState(false);
+  return (
+    <a href={'#/' + view} className={cls(on && 'on', over && 'drop')} data-spring={spring ? '#/' + view : undefined}
+      onDragOver={onTask ? (e) => { if (draggingId()) { e.preventDefault(); if (!over) setOver(true); } } : undefined}
+      onDragLeave={() => setOver(false)}
+      onDrop={onTask ? (e) => { e.preventDefault(); setOver(false); const id = draggingId(); const t = id ? S.tasks.get(id) : null; if (t) onTask(t); } : undefined}>
+      {icon}{label}
+    </a>
   );
 }
 
@@ -320,6 +339,7 @@ export function App() {
       const why = await boot();
       if (why) setErr(why);
     })();
+    installTouchDrag();
     try {
       const a = localStorage.getItem('todo.accent');
       if (a && a !== 'todoist') document.documentElement.dataset.accent = a;
@@ -343,6 +363,9 @@ export function App() {
       removeEventListener('pagehide', saveNow);
     };
   }, []);
+  // Календарь Google (cal.ts): окно встреч — как только Дела готовы (флаг cal в синке), дальше раз в 5 минут.
+  const calOn = S.ready && S.features.includes('cal');
+  useEffect(() => (calOn ? startCal() : undefined), [calOn]);
   useEffect(() => {
     if (r.view === 'task' && r.id && S.ready) {
       const t = [...S.tasks.values()].find((x) => String(x.num) === r.id || x.id === r.id);
@@ -351,8 +374,8 @@ export function App() {
   }, [r.view, r.id, S.ready]);
   if (err) return <Login msg={err} />;
   if (!S.ready) return <Login msg="Загружаю дела…" />;
-  const tab = (view: string, icon: React.ReactNode, label: string) => (
-    <a href={'#/' + view} className={r.view === view || (view === 'now' && r.view === '') ? 'on' : ''}>{icon}{label}</a>
+  const tab = (view: string, icon: React.ReactNode, label: string, onTask?: (t: Task) => void, spring?: boolean) => (
+    <NavTab view={view} on={r.view === view || (view === 'now' && r.view === '')} icon={icon} label={label} onTask={onTask} spring={spring} />
   );
   return (
     <div className={'app' + (UI.sideOff ? ' side-off' : '') + (UI.sideMobile ? ' side-m' : '')}>
@@ -365,12 +388,12 @@ export function App() {
       </main>
       <ClaudeBar />
       <nav className="bottom-nav">
-        {tab('now', <Icon name="bolt" size={22} />, 'Сейчас')}
-        {tab('today', <TodayIcon day={+S.today.slice(8, 10)} size={22} />, 'Сегодня')}
+        {tab('now', <Icon name="bolt" size={22} />, 'Сейчас', (t) => { if (t.focus_on !== S.today) setTask(t, { focus_on: S.today }, 'В «Сейчас»').catch(() => {}); })}
+        {tab('today', <TodayIcon day={+S.today.slice(8, 10)} size={22} />, 'Сегодня', (t) => { if (t.due_date !== S.today) setDue(t, { due_date: S.today }); })}
         {/* Дерево жизни — на телефоне под рукой (23.11.2026); «Предстоящее» — в «Обзоре» */}
-        {S.dirs.length ? tab('krug', <Icon name="tree" size={22} />, 'Круг') : tab('upcoming', <Icon name="upcoming" size={22} />, 'Предстоящее')}
-        {tab('inbox', <Icon name="inbox" size={22} />, 'Входящие')}
-        {tab('browse', <Icon name="menu" size={22} />, 'Обзор')}
+        {S.dirs.length ? tab('krug', <Icon name="tree" size={22} />, 'Круг', undefined, true) : tab('upcoming', <Icon name="upcoming" size={22} />, 'Предстоящее', undefined, true)}
+        {tab('inbox', <Icon name="inbox" size={22} />, 'Входящие', (t) => { if (t.project_id) setPlace(t, { project_id: null }); })}
+        {tab('browse', <Icon name="menu" size={22} />, 'Обзор', undefined, true)}
       </nav>
       <button className="fab" onClick={() => openQuick(defaultsFor())} aria-label="Добавить задачу"><Icon name="plus" size={28} sw={2} /></button>
       <TaskModal />

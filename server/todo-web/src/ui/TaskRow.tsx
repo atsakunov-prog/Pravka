@@ -14,6 +14,7 @@ import { Scheduler } from './pickers.tsx';
 import { openTask, UI } from './state.ts';
 import { TaskMenu } from './TaskMenu.tsx';
 import { pickPlace } from './Krug.tsx';
+import { touchDragging } from '../touchdrag.ts';
 
 export interface RowOpts {
   showProject?: boolean;
@@ -33,7 +34,7 @@ export interface RowOpts {
   hideDate?: boolean;
   /** Не показывать направление дерева жизни (вид самого направления или цели). */
   hideDir?: boolean;
-  /** Кнопка «Разложить» — выбор места в дереве прямо в строке (списки «Без места»; на телефоне перетаскивания нет). */
+  /** Кнопка «Разложить» — выбор места в дереве прямо в строке (списки «Без места»): быстрее, чем тащить по одной. */
   placeBtn?: boolean;
 }
 
@@ -130,6 +131,8 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
   const move = (e: RPE) => {
     const s = sw.current;
     if (!s) return;
+    // Палец поднял строку долгим нажатием (touchdrag.ts) — это перетаскивание, не свайп.
+    if (touchDragging()) { sw.current = null; setDx(0); return; }
     const mx = e.clientX - s.x, my = e.clientY - s.y;
     if (!s.on) {
       if (Math.abs(my) > 10) { sw.current = null; return; }

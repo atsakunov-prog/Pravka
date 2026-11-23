@@ -1,7 +1,9 @@
 // Виды: Сейчас, Входящие, Сегодня, Предстоящее, проект (разделы, сделки, доска), сделка, метка, фильтр, человек,
 // дерево целей, выполненные.
 import { api, uuid } from '../api.ts';
-import { CalendarView } from './Calendar.tsx';
+import { CalendarView, CalTray } from './Calendar.tsx';
+import { CalStale, DayEvents, SoonNudge } from './Events.tsx';
+import { dayEvents, soonEvent } from '../cal.ts';
 import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
 import { setDue, setPlace } from './acts.ts';
@@ -9,15 +11,15 @@ import { T } from '../toastText.ts';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { addDays, dayHead, MONTHS_NOM, mondayOf, plural, pluralForm, shortDate, WD, WD_SHORT, weekday } from '../dates.ts';
 import { compile, FilterError, runFilter } from '../filter.ts';
-import { crmUrl, dealShort, go, projectColor, STAGE } from '../lib.ts';
+import { crmUrl, dealShort, go, projectColor, STAGE, useMobile } from '../lib.ts';
 import { op1, ops, S, saveNowOrder, saveTodo, setTask, todoSettings, toast, useStore } from '../store.ts';
 import type { Id, Task } from '../types.ts';
 import {
   completedRecent, dayList, search as searchAll, dealTasks, inbox, labelTasks,
-  listed, liveDeals, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays,
+  listed, liveDeals, mine, nowHm, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays,
 } from '../views.ts';
 import { filterCtx } from './ctx.ts';
-import { DisplayMenu, groupTasks, shown, viewOpts } from './Display.tsx';
+import { DisplayMenu, groupTasks, saveViewOpts, shown, viewOpts } from './Display.tsx';
 import { viewLabel } from '../viewopts.ts';
 import { Icon, TodayIcon } from './icons.tsx';
 import { openPop } from './pop.tsx';
@@ -40,6 +42,8 @@ function DayTop({ add }: { add: Record<string, unknown> }) {
   const n = bellCount();
   const owed = ballCounts().owed;
   const cards: ReactNode[] = [];
+  // Встреча идёт или скоро (календарь Google, 23.11.2026) — первой: к ней готовиться или в неё входить.
+  if (soonEvent(nowHm())) cards.push(<SoonNudge key="cal" />);
   const nowLeft = nowList().length;
   if (isEvening() && nowLeft) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="moon" size={18} /><span><b>Итог дня</b><small>{nowLeft} в «Сейчас» — сделать или на завтра</small></span><Icon name="chevR" size={16} /></a>);
   else if (!planDone()) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="sun" size={18} /><span><b>Спланировать день</b><small>что горит и что двигает жизнь — за пару минут</small></span><Icon name="chevR" size={16} /></a>);
@@ -235,7 +239,8 @@ export function TodayView() {
             Просрочено<span className="n">{over.length}</span>
             <span className="right"><button className="act" onClick={(e) => reschedule(e.currentTarget)}>Перенести</button></span>
           </div>
-          {openOver ? <TaskList tasks={over} rowOpts={{ showProject: true }} nest={false} /> : null}
+          {/* drop без своего броска: просроченное тянется — на «Сегодня», день, сетку, вкладку внизу (23.11.2026) */}
+          {openOver ? <TaskList tasks={over} rowOpts={{ showProject: true }} nest={false} drop={{ nest: false, onDrop: () => {} }} /> : null}
         </div>
       ) : null}
       <div className="sect">
@@ -244,6 +249,8 @@ export function TodayView() {
           onDrop={(e) => { e.preventDefault(); const d = draggingId() && S.tasks.get(draggingId()!); if (d) dropToday.onDrop(d); }}>
           {dayHead(S.today, S.today).join(' · ')}<span className="n">{today.length || ''}</span>
         </div>
+        <CalStale />
+        <DayEvents day={S.today} />
         {todayGroups.length === 1 && !todayGroups[0].title
           ? <TaskList tasks={today} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={{ due_date: S.today }} drop={dropToday} />
           : todayGroups.map((g, i) => (
@@ -253,17 +260,48 @@ export function TodayView() {
             </div>
           ))}
       </div>
-      {!n ? <Empty big="Всё сделано!" text="На сегодня задач нет — хорошего дня." /> : null}
+      {!n ? <Empty big="Всё сделано!" text={dayEvents(S.today).length ? 'Задач на сегодня нет — только встречи выше.' : 'На сегодня задач нет — хорошего дня.'} /> : null}
     </Page>
   );
 }
 
 // ── Предстоящее ──────────────────────────────────────────────────────────
 
+/** «Список | Календарь» у «Предстоящего» (23.11.2026): Todoist даёт тот же выбор; выбор — личный, в настройках вида. */
+function UpLayout({ o }: { o: ReturnType<typeof viewOpts> }) {
+  const cal = o.layout === 'calendar';
+  return (
+    <span className="segs up-lay">
+      <button className={'seg' + (!cal ? ' on' : '')} onClick={() => saveViewOpts('upcoming', { ...o, layout: 'list' })}><Icon name="list" size={15} />Список</button>
+      <button className={'seg' + (cal ? ' on' : '')} onClick={() => saveViewOpts('upcoming', { ...o, layout: 'calendar' })}><Icon name="calendar" size={15} />Календарь</button>
+    </span>
+  );
+}
+
 export function UpcomingView() {
   useStore();
+  const mobile = useMobile();
+  const uo = viewOpts('upcoming');
   const [start, setStart] = useState(mondayOf(S.today));
   const [days, setDays] = useState(21);
+  const [dropDay, setDropDay] = useState<string | null>(null);
+  if (uo.layout === 'calendar') {
+    // Сетка: мои задачи со сроком и встречи календаря; сбоку — что разложить по часам (сегодня без часа, просроченное,
+    // «Сейчас» без часа). На телефоне — три дня, лоток сверху полосой.
+    const mineDue = listed().filter((t) => mine(t) && t.due_date && (t.kind ?? 'task') === 'task');
+    const noTime = (t: Task) => !t.due_time;
+    const trayGroups = [
+      { title: 'Сегодня без часа', tasks: dayList(S.today).filter((t) => t.due_date === S.today && noTime(t)) },
+      { title: 'Просрочено', tasks: overdue() },
+      { title: 'В «Сейчас» без срока', tasks: nowList().filter((t) => !t.due_date) },
+    ];
+    return (
+      <Page title="Предстоящее" crumbs="Предстоящее" actions={<UpLayout o={uo} />} wide>
+        <CalendarView tasks={mineDue} o={{ ...uo, calMode: uo.calMode || (mobile ? '3d' : 'week') }} add={{}} events
+          onMode={(m) => saveViewOpts('upcoming', { ...uo, calMode: m })} tray={<CalTray groups={trayGroups} />} />
+      </Page>
+    );
+  }
   const from = start < S.today ? S.today : start;
   const list = upcomingDays(from, days);
   const over = start <= S.today ? overdue() : [];
@@ -274,14 +312,13 @@ export function UpcomingView() {
     requestAnimationFrame(() => document.getElementById('day-' + d)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
   const week = Array.from({ length: 7 }, (_, i) => addDays(start, i));
-  const [dropDay, setDropDay] = useState<string | null>(null);
   const moveTo = (day: string) => {
     const d = draggingId() && S.tasks.get(draggingId()!);
     setDropDay(null);
     if (d && d.due_date !== day) setDue(d, { due_date: day });
   };
   return (
-    <Page title="Предстоящее" crumbs="Предстоящее">
+    <Page title="Предстоящее" crumbs="Предстоящее" actions={<UpLayout o={uo} />}>
       <div className="up-head">
         <div className="up-nav">
           <span className="month">{MONTHS_NOM[+start.slice(5, 7) - 1]} {start.slice(0, 4)}</span>
@@ -293,15 +330,16 @@ export function UpcomingView() {
           {week.map((d) => (
             <button key={d} className={[d === S.today ? 'today' : '', d < S.today ? 'past' : ''].join(' ')} onClick={() => scrollTo(d)}>
               <span className="wd">{WD_SHORT[weekday(d)]}</span><span className="n">{+d.slice(8, 10)}</span>
-              {busy.has(d) ? <span className="busy" /> : null}
+              {busy.has(d) || dayEvents(d).length ? <span className="busy" /> : null}
             </button>
           ))}
         </div>
       </div>
+      <CalStale />
       {over.length ? (
         <div className="sect over">
           <div className="sect-h">Просрочено<span className="n">{over.length}</span></div>
-          <TaskList tasks={over} rowOpts={{ showProject: true }} nest={false} />
+          <TaskList tasks={over} rowOpts={{ showProject: true }} nest={false} drop={{ nest: false, onDrop: () => {} }} />
         </div>
       ) : null}
       {list.map(({ day, tasks }) => (
@@ -311,6 +349,7 @@ export function UpcomingView() {
             onDrop={(e) => { e.preventDefault(); moveTo(day); }}>
             {dayHead(day, S.today).map((x, i) => <span key={i} className={i ? 'rest' : ''}>{i ? <span className="dot">· </span> : null}{x}</span>)}
           </div>
+          <DayEvents day={day} />
           <TaskList tasks={tasks} rowOpts={{ showProject: true, hideDate: true }} nest={false} add={{ due_date: day }}
             drop={{ nest: false, onDrop: (d) => { if (d.due_date !== day) setDue(d, { due_date: day }); } }} />
         </div>

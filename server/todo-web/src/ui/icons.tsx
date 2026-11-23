@@ -65,6 +65,8 @@ const P: Record<string, string> = {
   activity: 'M3 12h4l3-7 4 14 3-7h4',
   food: 'M7 3v8M5 3v5a2 2 0 0 0 4 0V3M7 11v10M17 21V3c-2 0-3.5 3-3.5 7H17',
   ruble: 'M8 20V4h5a4 4 0 0 1 0 8H6M6 16h8',
+  // созвон — камера (23.11.2026: «Войти» у встреч календаря)
+  video: 'M4 7.5A1.5 1.5 0 0 1 5.5 6h8A1.5 1.5 0 0 1 15 7.5v9a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 4 16.5zM15 10.5l5-3v9l-5-3',
 };
 
 export function Icon({ name, size = 24, style, sw = 1.5, title }: { name: string; size?: number; style?: CSSProperties; sw?: number; title?: string }): ReactElement {
