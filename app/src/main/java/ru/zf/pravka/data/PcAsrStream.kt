@@ -2,6 +2,7 @@ package ru.zf.pravka.data
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -35,6 +36,11 @@ class PcAsrStream(
     private val token: String,
     val takeId: String,
     private val log: (String) -> Unit,
+    /**
+     * Дверь распознавания у сервера: `asr/` — архив (телефон владельца, общий токен телефона), `api/asr/` —
+     * Дела (телефоны семьи, токен устройства Дел; 23.11.2026 — у телефона семьи архива нет, и комп ему не включался).
+     */
+    private val asrPath: String = "asr/",
     // Часы замера (`elapsedRealtime` телефона); в тестах — свои.
     private val clock: () -> Long = { android.os.SystemClock.elapsedRealtime() },
 ) : MicFeed.Tee {
@@ -57,13 +63,26 @@ class PcAsrStream(
     /** Отправка ещё жива: не бросила тейк. false — строки компа больше не будет, показывать Google. */
     val alive: Boolean get() = synchronized(lock) { broken == null }
 
+    /**
+     * Дорога в этом тейке подводила: кусок шёл дольше [STALL_MS], был повтор или отправка отстала. Тогда отставшая
+     * строка компа и неуспевший итог — не «комп застрял», и сторож их не считает (23.11.2026: два тейка в машине
+     * ушли в Google с «комп не ответил», а комп считал итог за 0,12 с — кусок ехал до него 14 с).
+     */
+    val stalled: Boolean
+        get() = synchronized(lock) { stalledFlag || (inFlightSince > 0L && clock() - inFlightSince > STALL_MS) }
+
     private val base = archiveUrl.trimEnd('/') + "/"
+    // Свой пул соединений на все тейки: застрявшее соединение (мобильная сеть, полуоткрытый TCP) выбрасывается
+    // целиком, и повтор идёт по новому, а не ждёт таймаута чтения на мёртвом.
     private val client = http.newBuilder()
+        .connectionPool(POOL)
         .connectTimeout(5, TimeUnit.SECONDS)
         .writeTimeout(10, TimeUnit.SECONDS)
         // end ждёт на сервере недостающий кусок до 5 с и считает последнюю область.
         .readTimeout(12, TimeUnit.SECONDS)
         .build()
+    // Кусок — круг за 0,2–0,7 с; дольше CHUNK_TIMEOUT_MS — соединение мёртвое: бросить и повторить по новому.
+    private val chunkClient = client.newBuilder().callTimeout(CHUNK_TIMEOUT_MS, TimeUnit.MILLISECONDS).build()
 
     private val lock = Object()
     /** Ещё не принятое сервером: байты с места [pendingFrom] в звуке тейка. */
@@ -79,6 +98,11 @@ class PcAsrStream(
     /** Сервер хоть раз принял кусок — дорога до компа есть. */
     private var reached = false
     private var sender: Thread? = null
+    /** Весь звук у компа, итог спрошен: дальше ждём уже комп, а не дорогу. */
+    private var endSent = false
+    private var stalledFlag = false
+    /** Когда ушёл кусок, ответа на который ещё нет (0 — нет такого). */
+    private var inFlightSince = 0L
 
     private val result = CompletableDeferred<PcAsr.Result>()
 
@@ -97,6 +121,7 @@ class PcAsrStream(
             pendingLen += n
             written += n
             if (pendingLen > PcAsr.BEHIND_MAX_BYTES) {
+                stalledFlag = true
                 breakWith(Outcome.INCOMPLETE, "отправка отстала на ${pendingLen / PcAsr.BYTES_PER_SEC} с звука — связь не тянет")
             }
             lock.notifyAll()
@@ -123,7 +148,7 @@ class PcAsrStream(
             lock.notifyAll()
         }
         thread(name = "pravka-pc-asr-drop", isDaemon = true) {
-            runCatching { post("asr/drop?take=$takeId", ByteArray(0)) }
+            runCatching { post("drop?take=$takeId", ByteArray(0)) }
         }
     }
 
@@ -133,8 +158,17 @@ class PcAsrStream(
      */
     suspend fun await(budgetMs: Long = PcAsr.WAIT_MS): PcAsr.Result {
         if (!attached) return PcAsr.Result(Outcome.UNAVAILABLE, note = "своей записи не было — звука для компа нет")
-        return withTimeoutOrNull(budgetMs) { result.await() }
-            ?: PcAsr.Result(Outcome.STUCK, note = "комп не ответил за ${budgetMs / 1000.0} с".replace('.', ','))
+        withTimeoutOrNull(budgetMs) { result.await() }?.let { return it }
+        val budget = "${budgetMs / 1000.0} с".replace('.', ',')
+        // Не дождались. Звук ещё в дороге — виновата дорога, а не комп: Google без счёта сторожу (23.11.2026).
+        synchronized(lock) {
+            if (!endSent) {
+                stalledFlag = true
+                val left = "%.1f".format(pendingLen / PcAsr.BYTES_PER_SEC.toDouble())
+                return PcAsr.Result(Outcome.INCOMPLETE, note = "звук не доехал до компа за $budget (в дороге ещё $left с) — сеть медленная")
+            }
+        }
+        return PcAsr.Result(Outcome.STUCK, note = "комп не ответил за $budget")
     }
 
     // ------------------------------------------------------------ отправка
@@ -161,13 +195,15 @@ class PcAsrStream(
                         off = -1
                         piece = ByteArray(0)
                     } else {
-                        // Отстали — шлём больше секунды разом (до 2 МБ договора — с запасом).
-                        val take = minOf(pendingLen, PcAsr.CHUNK_BYTES * 4)
+                        // Отстали — шлём больше разом, до трёх секунд (договор — до 1 МБ): после затыка дороги
+                        // догнать за пару кругов.
+                        val take = minOf(pendingLen, PcAsr.CHUNK_BYTES * 6)
                         off = pendingFrom
                         piece = pending.copyOf(take)
                     }
                 }
                 if (off < 0) {
+                    synchronized(lock) { endSent = true }
                     end()
                     return
                 }
@@ -199,13 +235,20 @@ class PcAsrStream(
         for (attempt in 0 until RETRIES) {
             if (attempt > 0) {
                 timing?.retry()
+                synchronized(lock) { stalledFlag = true }
                 Thread.sleep(BACKOFF_MS[attempt - 1])
             }
             synchronized(lock) { if (broken != null) return null }
             try {
                 val sentAt = clock()
-                val (code, body) = post("asr/chunk?take=$takeId&off=$off", piece)
+                synchronized(lock) { inFlightSince = sentAt }
+                val (code, body) = try {
+                    post("chunk?take=$takeId&off=$off", piece, chunkClient)
+                } finally {
+                    synchronized(lock) { inFlightSince = 0L }
+                }
                 val now = clock()
+                if (now - sentAt > STALL_MS) synchronized(lock) { stalledFlag = true }
                 if (code == 200) {
                     timing?.chunk(now - sentAt, body.optLong("ms", -1))
                     body.optJSONObject("live")?.let { l -> deliverLive(l, now) }
@@ -221,6 +264,8 @@ class PcAsrStream(
                 }
             } catch (e: IOException) {
                 lastWhy = "нет связи с домом: ${e.javaClass.simpleName}"
+                // Таймаут или обрыв: соединение могло умереть молча — следующий раз по новому.
+                runCatching { POOL.evictAll() }
             }
         }
         give(if (reachedNow()) Outcome.INCOMPLETE else Outcome.UNAVAILABLE, lastWhy)
@@ -247,7 +292,7 @@ class PcAsrStream(
         for (attempt in 0 until RETRIES) {
             if (attempt > 0) Thread.sleep(BACKOFF_MS[attempt - 1])
             try {
-                val (code, body) = post("asr/end?take=$takeId&total=$total", ByteArray(0))
+                val (code, body) = post("end?take=$takeId&total=$total", ByteArray(0))
                 when (code) {
                     200 -> {
                         val ms = System.currentTimeMillis() - t0
@@ -277,13 +322,13 @@ class PcAsrStream(
         give(Outcome.UNAVAILABLE, "итог с компа не пришёл — нет связи")
     }
 
-    private fun post(path: String, body: ByteArray): Pair<Int, JSONObject> {
+    private fun post(path: String, body: ByteArray, via: OkHttpClient = client): Pair<Int, JSONObject> {
         val req = Request.Builder()
-            .url(base + path)
+            .url(base + asrPath + path)
             .header("Authorization", "Bearer $token")
             .post(body.toRequestBody(OCTET))
             .build()
-        client.newCall(req).execute().use { r ->
+        via.newCall(req).execute().use { r ->
             val text = r.body?.string().orEmpty()
             return r.code to (runCatching { JSONObject(text) }.getOrNull() ?: JSONObject())
         }
@@ -293,5 +338,14 @@ class PcAsrStream(
         private val OCTET = "application/octet-stream".toMediaType()
         private const val RETRIES = 3
         private val BACKOFF_MS = longArrayOf(300, 800)
+
+        /** Кусок дольше — соединение считаем мёртвым (обычный круг 0,2–0,7 с, три секунды звука по LTE — ~1 с). */
+        const val CHUNK_TIMEOUT_MS = 4_000L
+
+        /** Кусок шёл дольше — дорога подвела в этом тейке ([stalled]): как у строки, `LineMux.STALE_MS`. */
+        const val STALL_MS = 2_000L
+
+        /** Соединения отправки звука — свои, общие на все тейки: застрявшие выбрасываются разом. */
+        private val POOL = ConnectionPool(2, 1, TimeUnit.MINUTES)
     }
 }

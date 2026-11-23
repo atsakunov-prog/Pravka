@@ -56,6 +56,7 @@ from starlette.routing import Route
 from . import ask, db, debug, family, kovcheg_ui, llm, parse, remind, store, tokens, twins, when
 from . import guard as claude_guard  # защита от петли (аудит №12); имя guard у API — обёртка маршрутов
 from .config import Config
+from pravka_archive import sluh  # дверь «Слуха» одна на архив и Дела (договор contract/sluh.json)
 
 log = logging.getLogger("dela.api")
 
@@ -708,6 +709,37 @@ def build(cfg: Config) -> Starlette:
             return _err("нет такого дела или оно не видно", 404)
         return _json({"ok": True, **out})
 
+    # Звук тейка «П» — на распознавание компу (23.11.2026). Телефон владельца ходит дверью архива (общий токен
+    # телефона), а у телефонов семьи архива нет: им комп так и не включался, всё шло через Google. Здесь — та же
+    # дверь своим токеном устройства Дел и только семье (crm.users.family): чужой голос на домашний комп не пишем,
+    # службам компа распознаватель ни к чему. Передаёт как есть тот же `pravka_archive.sluh.forward` (договор
+    # `contract/sluh.json`): ошибки «Слуха» — его кодом, 503 — телефон берёт Google.
+    async def asr(request: Request, action: str):
+        who = await auth(request)
+        if not who:
+            return _err("нужен вход", 401)
+        if who.kind != "device":
+            return _err("распознавание звука — только телефону", 403)
+
+        def in_family() -> bool:
+            # Флаг семьи — тот же, что у дайджеста и карточек людей (dela_0008; ставит только владелец командой family).
+            with db.session(url, who.user, via="app") as conn:
+                row = conn.execute("SELECT family FROM crm.users WHERE id = %s", (who.user,)).fetchone()
+            return bool(row and row["family"])
+
+        if not await anyio.to_thread.run_sync(in_family):
+            return _err("распознавание на домашнем компе — только семье", 403)
+        return await sluh.forward(cfg.sluh_url, request, action)
+
+    async def asr_chunk(request: Request):
+        return await asr(request, "chunk")
+
+    async def asr_end(request: Request):
+        return await asr(request, "end")
+
+    async def asr_drop(request: Request):
+        return await asr(request, "drop")
+
     routes = [
         ("/health", health, None),
         ("/", page, None),
@@ -727,6 +759,9 @@ def build(cfg: Config) -> Starlette:
         ("/api/settings", settings, None),
         ("/api/reminders/due", reminders_due, None),
         ("/api/reminders/act", reminders_act, ["POST"]),
+        ("/api/asr/chunk", asr_chunk, ["POST"]),
+        ("/api/asr/end", asr_end, ["POST"]),
+        ("/api/asr/drop", asr_drop, ["POST"]),
     ]
     # Каждый /api/-путь — через guard (белый список узких токенов): новый путь, добавленный сюда, закрыт им сам.
     # Захват (capture.py): фразы, которые правило не узнало, разбирает фоновый цикл. Служба (python -m pravka_dela serve)

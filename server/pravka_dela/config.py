@@ -82,6 +82,9 @@ class Config:
     # Журнал входов паролем (logins.jsonl): сборщик «Дома» на компе шлёт каждую строку владельцу в Telegram. Лежит в
     # журналах службы — в папку секретов у неё права только на чтение. None — не писать (тесты).
     logins_file: Path | None = None
+    # «Слух» — распознавание звука тейков «П» на этом компе (23.11.2026, `api.asr`): дверь для телефонов семьи, у
+    # которых нет архива (у владельца та же дверь — в архиве). Служба наружу не видна, только 127.0.0.1.
+    sluh_url: str = "http://127.0.0.1:8110"
 
     @property
     def app_role(self) -> str:
@@ -122,4 +125,5 @@ def load(env_file: str | None = None) -> Config:
         debug_from=parse_debug_from(get("DELA_DEBUG_FROM")),
         family_file=Path(get("DELA_FAMILY_FILE") or str(Path(get("DELA_DATA", r"C:\ProgramData\ZF-Dela")) / "secrets" / "family.json")),
         logins_file=Path(get("DELA_LOGINS_FILE") or str(Path(get("DELA_LOGS", r"C:\Bot\ZFbot\logs\dela")) / "logins.jsonl")),
+        sluh_url=get("DELA_SLUH_URL", "http://127.0.0.1:8110").rstrip("/"),
     )

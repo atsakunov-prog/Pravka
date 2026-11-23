@@ -73,7 +73,7 @@ location / { return 404; }
 | `/mcp` | Claude из claude.ai | OAuth: страница `/login`, пароль `PRAVKA_OWNER_PASSWORD` |
 | `/ingest` | телефон; службы компа (с 13.10.2026 — «Еда», только `food.meal`, и «Диктовка», только `pravka.take` и `pravka.clean` с ключами `pc-…`; устройство `svc-<имя>`) | `Authorization: Bearer PRAVKA_INGEST_TOKEN`; служба — свой токен из `core.tokens` |
 | `/sync` | телефон и службы компа: что поменял кто-то другой (с 13.10.2026 — еда и диктовки компа; по диктовкам — только записанное службами, `sync.FROM_SERVICES`) | те же токены |
-| `/asr/chunk`, `/asr/end`, `/asr/drop` | телефон: звук тейка «П» кусками и итог — архив передаёт службе «Слух» (GigaAM-v3, `PRAVKA_SLUH_URL`, с завода `http://127.0.0.1:8110`) как есть, 5xx службы — 503 (20.11.2026, `sluh.py`, договор `contract/sluh.json`) | только `PRAVKA_INGEST_TOKEN` |
+| `/asr/chunk`, `/asr/end`, `/asr/drop` | телефон: звук тейка «П» кусками и итог — архив передаёт службе «Слух» (GigaAM-v3, `PRAVKA_SLUH_URL`, с завода `http://127.0.0.1:8110`) как есть, 5xx службы — 503 (20.11.2026, `sluh.py`, договор `contract/sluh.json`) | только `PRAVKA_INGEST_TOKEN`; телефонам семьи — та же дверь в Делах `/api/asr/*` (23.11.2026, токен устройства, `crm.users.family`) |
 | `/.well-known/…`, `/register`, `/authorize`, `/token`, `/revoke` | Claude при подключении | — |
 | `/health` | проверка | — |
 

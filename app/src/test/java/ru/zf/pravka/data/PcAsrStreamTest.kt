@@ -33,6 +33,7 @@ class PcAsrStreamTest {
         var endDelayMs = 0L
         var endTotal = -1L
         var dropped = false
+        val paths: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
         fun respond(req: Request): Response {
             if (down) throw IOException("нет связи")
@@ -40,7 +41,9 @@ class PcAsrStreamTest {
                 failNext--
                 throw IOException("обрыв")
             }
-            val path = req.url.encodedPath
+            paths += req.url.encodedPath
+            // дверь Дел (`api/asr/*`) ведёт туда же, что дверь архива
+            val path = req.url.encodedPath.removePrefix("/api")
             val body = Buffer().also { req.body?.writeTo(it) }.readByteArray()
             return when (path) {
                 "/asr/chunk" -> {
@@ -193,6 +196,60 @@ class PcAsrStreamTest {
         val until = System.currentTimeMillis() + 2_000
         while (!home.dropped && System.currentTimeMillis() < until) Thread.sleep(20)
         assertTrue(home.dropped)
+    }
+
+    @Test
+    fun `звук ещё в дороге, когда бюджет кончился, — это сеть, а не комп`() = runBlocking {
+        // 23.11.2026: кусок ехал до компа 14 с, комп посчитал итог за 0,12 с, а сторож записал «комп застрял».
+        val home = FakeHome()
+        val slow = OkHttpClient.Builder().addInterceptor(Interceptor {
+            if (it.request().url.encodedPath.endsWith("/chunk")) Thread.sleep(700)
+            home.respond(it.request())
+        }).build()
+        val s = PcAsrStream(slow, "https://home.example:8443/", "t".repeat(40), "take_3", log = {}, clock = { System.currentTimeMillis() })
+        speak(s, 1.2)
+        Thread.sleep(50)
+        speak(s, 1.2)
+        s.close(complete = true)
+        val r = s.await(300)
+        assertEquals(Outcome.INCOMPLETE, r.outcome)
+        assertTrue(r.note, r.note.contains("не доехал"))
+        assertTrue("дорога в этом тейке подвела", s.stalled)
+        s.cancel()
+    }
+
+    @Test
+    fun `кусок завис — бросаем соединение, повтор по новому, итог цел`() = runBlocking {
+        val home = FakeHome()
+        var hung = false
+        val http = OkHttpClient.Builder().addInterceptor(Interceptor {
+            if (!hung && it.request().url.encodedPath.endsWith("/chunk")) {
+                hung = true
+                Thread.sleep(PcAsrStream.CHUNK_TIMEOUT_MS + 500)   // мёртвое соединение: ответа нет дольше таймаута
+            }
+            home.respond(it.request())
+        }).build()
+        val s = PcAsrStream(http, "https://home.example:8443/", "t".repeat(40), "take_4", log = {}, clock = { System.currentTimeMillis() })
+        speak(s, 1.0)
+        s.close(complete = true)
+        val r = s.await(10_000)
+        assertEquals(Outcome.OK, r.outcome)
+        assertEquals(32_000L, home.have)
+        assertTrue(s.stalled)
+    }
+
+    @Test
+    fun `телефон семьи — дверь Дел, тот же путь звука`() = runBlocking {
+        val home = FakeHome()
+        val http = OkHttpClient.Builder().addInterceptor(Interceptor { home.respond(it.request()) }).build()
+        val s = PcAsrStream(http, "https://dela.example/", "d".repeat(40), "take_5", log = {},
+            clock = { System.currentTimeMillis() }, asrPath = "api/asr/")
+        speak(s, 1.2)
+        s.close(complete = true)
+        assertEquals(Outcome.OK, s.await(5_000).outcome)
+        assertTrue(home.paths.toList().toString(), home.paths.all { it.startsWith("/api/asr/") })
+        assertTrue(home.paths.contains("/api/asr/end"))
+        assertTrue("чистая дорога — не «подвела»", !s.stalled)
     }
 
     @Test

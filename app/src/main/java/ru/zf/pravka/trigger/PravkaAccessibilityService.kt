@@ -1318,15 +1318,18 @@ class PravkaAccessibilityService : AccessibilityService() {
      * звука не годится: тогда итог от Google, как раньше. Без диска: ссылка на архив — в памяти.
      */
     private fun newPcStream(tape: File): ru.zf.pravka.data.PcAsrStream? {
-        val link = app.archiveSync.link.value
-        if (link == null) {
-            app.eventLog.add("итог с компа: архив не подключён — итог от Google")
-            return null
-        }
         val id = ru.zf.pravka.core.PcAsr.takeId(tape.name) ?: return null
-        return ru.zf.pravka.data.PcAsrStream(app.httpClient, link.url, link.token, id, log = { line ->
-            app.eventLog.add("итог с компа: $line")
-        })
+        val log: (String) -> Unit = { line -> app.eventLog.add("итог с компа: $line") }
+        // Телефон владельца — дверь архива (общий токен телефона). Телефоны семьи архива не знают (23.11.2026: телефону
+        // семьи комп так и не включался) — им дверь Дел своим токеном устройства (`api/asr/*`).
+        app.archiveSync.link.value?.let { link ->
+            return ru.zf.pravka.data.PcAsrStream(app.httpClient, link.url, link.token, id, log = log)
+        }
+        app.delaSync.link.value?.let { link ->
+            return ru.zf.pravka.data.PcAsrStream(app.httpClient, link.url, link.token, id, log = log, asrPath = "api/asr/")
+        }
+        app.eventLog.add("итог с компа: нет ни архива, ни Дел — итог от Google")
+        return null
     }
 
     /**
@@ -1381,14 +1384,19 @@ class PravkaAccessibilityService : AccessibilityService() {
      */
     private fun noteLine(take: PcTake) {
         if (!take.livePc || take.stream == null) return
+        val lagged = take.mux.stuck()
         val outcome = when {
             !take.stream.reachedHome -> ru.zf.pravka.core.PcAsr.Outcome.UNAVAILABLE
-            take.mux.stuck() -> ru.zf.pravka.core.PcAsr.Outcome.STUCK
+            // Дорога подвела (кусок ехал дольше 2 с, повтор, отправка отстала) — комп ни при чём, не в счёт
+            // (23.11.2026: строка уходила на Google, пока кусок висел в сети, а сторож считал это застреванием компа).
+            lagged && take.stream.stalled -> ru.zf.pravka.core.PcAsr.Outcome.INCOMPLETE
+            lagged -> ru.zf.pravka.core.PcAsr.Outcome.STUCK
             else -> ru.zf.pravka.core.PcAsr.Outcome.OK
         }
-        if (outcome == ru.zf.pravka.core.PcAsr.Outcome.STUCK) {
+        if (lagged) {
             app.eventLog.add("строка компа отставала: Google в пилюле ${take.mux.googleShownMs} мс из " +
-                "${take.mux.googleShownMs + take.mux.pcShownMs}, уходила ${take.mux.fallbacks} раз")
+                "${take.mux.googleShownMs + take.mux.pcShownMs}, уходила ${take.mux.fallbacks} раз" +
+                if (outcome == ru.zf.pravka.core.PcAsr.Outcome.INCOMPLETE) " — подвела дорога, не в счёт" else "")
         }
         if (!liveBreaker.note(outcome)) return
         val at = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru")).format(java.util.Date())
