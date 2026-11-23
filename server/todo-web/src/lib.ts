@@ -68,6 +68,26 @@ export function placeName(p: { project_id: Id | null; deal_id?: Id | null; secti
   return projectName(p.project_id) + (s ? ' / ' + s : '');
 }
 export const dealName = (id: Id | null | undefined) => (id ? S.deals.get(id)?.name || '…' : '');
+/** Куда написать человеку (23.11.2026: три «написать …» подряд — дело открывает чат сразу): ник Telegram,
+ *  иначе номер (t.me/+номер открывает чат, если номер в Telegram), иначе id. Нет ничего — null. */
+export function tgLink(id: Id | null | undefined): string | null {
+  const p = id ? (S.people.get(id) as Record<string, unknown> | undefined) : undefined;
+  if (!p) return null;
+  const nick = String(p.telegram_username || '').replace(/^@/, '').trim();
+  if (nick) return 'https://t.me/' + nick;
+  const phone = String(((p.phones as string[] | undefined) || [])[0] || '').replace(/[^\d+]/g, '');
+  if (phone.replace('+', '').length >= 10) return 'https://t.me/' + (phone.startsWith('+') ? phone : '+' + phone);
+  if (p.telegram_id) return 'tg://user?id=' + p.telegram_id;
+  return null;
+}
+
+/** Номер для «Позвонить»: первый телефон человека. */
+export function telLink(id: Id | null | undefined): string | null {
+  const p = id ? (S.people.get(id) as Record<string, unknown> | undefined) : undefined;
+  const phone = String(((p?.phones as string[] | undefined) || [])[0] || '').replace(/[^\d+]/g, '');
+  return phone.replace('+', '').length >= 10 ? 'tel:' + phone : null;
+}
+
 export function personName(id: Id | null | undefined): string {
   if (!id) return '';
   const p = S.people.get(id);

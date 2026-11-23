@@ -3,7 +3,7 @@
 import { api, uuid } from '../api.ts';
 import { CalendarView, CalTray } from './Calendar.tsx';
 import { CalStale } from './Events.tsx';
-import { DayPlanView, NowBlock, nowBlock, planFor } from './DayPlan.tsx';
+import { DayPlanView, NowBlock, nowBlock, planFor, RestHead } from './DayPlan.tsx';
 import { dayEvents } from '../cal.ts';
 import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
@@ -221,6 +221,19 @@ function DayNav({ day }: { day: string }) {
   );
 }
 
+/** Строка записи для другого дня (24.11.2026): «Записать на завтра…» — быстрый ввод сразу с этим днём; микрофон —
+ *  «Надиктовать задачи» (сервер сам разрежет наговорку на дела). */
+function DayCapture({ day }: { day: string }) {
+  const w = day === addDays(S.today, 1) ? 'на завтра' : 'на ' + dayHead(day, S.today)[0];
+  return (
+    <button className="capture" onClick={() => openQuick({ due_date: day })}>
+      <span className="plus"><Icon name="plus" size={18} sw={2} /></span>
+      <span className="ph">Записать {w}: дело, вопрос к встрече, «в машине…»</span>
+      <span className="mic" onClick={(e) => { e.stopPropagation(); openDictate(); }} title="Надиктовать"><Icon name="mic" size={18} /></span>
+    </button>
+  );
+}
+
 /** «Сегодня» — и любой другой день (#/day/ГГГГ-ММ-ДД). Сверху — лента дня (DayPlan.tsx): встречи и дела со своим часом
  *  по порядку, окна и накладки, под блоком — вопросы к встрече и «в машине можно»; ниже — дела без часа: с завода —
  *  мяч прежних Дел (Отбить / Запустить / Мониторить, слово владельца 10.10 — «базовая группировка»), в «Отображении» —
@@ -250,7 +263,7 @@ export function TodayView({ day }: { day?: string }) {
   const groups = groupTasks(rest, to.group ?? 'ball');
   const title = isToday ? 'Сегодня' : d === addDays(S.today, 1) ? 'Завтра' : dayHead(d, S.today)[0];
   return (
-    <Page title={title} crumbs={<DayNav day={d} />} top={isToday ? <><DayStrip /><DayTop add={{ due_date: S.today }} /></> : null}
+    <Page title={title} crumbs={<DayNav day={d} />} top={isToday ? <><DayStrip /><DayTop add={{ due_date: S.today }} /></> : <DayCapture day={d} />}
       actions={<DisplayBtn vkey="today" board={false} />} sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
       {over.length ? (
         <div className="sect over">
@@ -271,7 +284,7 @@ export function TodayView({ day }: { day?: string }) {
         </div>
         <CalStale />
         <DayPlanView day={d} />
-        {plan.items.length && rest.length ? <div className="sect-h sub-h dp-rest">Без часа<span className="n">{rest.length}</span></div> : null}
+        {plan.items.length ? <RestHead day={d} count={rest.length} /> : null}
         {groups.length === 1 && !groups[0].title
           ? <TaskList tasks={rest} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={{ due_date: d }} drop={dropDay} />
           : groups.map((g, i) => (

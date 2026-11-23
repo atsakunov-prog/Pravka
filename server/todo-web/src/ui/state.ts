@@ -7,6 +7,7 @@ export interface QuickDefaults {
   deal_id?: Id | null;
   section_id?: Id | null;
   due_date?: string | null;
+  due_time?: string | null; // «+» в окне ленты дня — дело сразу на начало окна (23.11.2026)
   focus_on?: string | null;
   why_id?: Id | null;
   directions?: string[]; // направление дерева жизни без цели (вид направления, «~Здоровье» в строке)

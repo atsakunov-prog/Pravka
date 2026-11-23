@@ -88,7 +88,7 @@ export function Editor({ defaults = {}, onClose, inline, keepOpen }: { defaults?
     : man.place || { project_id: defaults.project_id ?? null, deal_id: defaults.deal_id ?? null, section_id: defaults.section_id ?? null };
   const due: DueVal = parsed.due_date !== undefined || parsed.clear
     ? { due_date: parsed.due_date ?? null, due_time: parsed.due_time ?? null, recur: parsed.recur ?? null, due_rule: parsed.due_rule ?? null }
-    : man.due || { due_date: defaults.due_date ?? null, due_time: null, recur: null, due_rule: null };
+    : man.due || { due_date: defaults.due_date ?? null, due_time: defaults.due_time ?? null, recur: null, due_rule: null };
   const priority = parsed.priority ?? man.priority ?? defaults.priority ?? 4;
   const labels = [...new Set([...(man.labels ?? defaults.labels ?? []), ...parsed.labels])];
   const person = parsed.person_id ?? (man.person_id !== undefined ? man.person_id : defaults.person_id ?? null);

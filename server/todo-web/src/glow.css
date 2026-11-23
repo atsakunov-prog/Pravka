@@ -459,7 +459,7 @@ html.tdragging, html.tdragging * { -webkit-user-select: none; user-select: none;
 .dp-sub { margin: 0 0 6px 26px; padding: 2px 0 2px 10px; border-left: 2px dashed var(--border); }
 .dp-sub-h { font-size: 11px; font-weight: 700; color: var(--fg3); text-transform: uppercase; letter-spacing: .04em; padding: 4px 0 0; }
 .dp-sub .task { padding-top: 5px; padding-bottom: 5px; }
-.dp-gap { display: grid; grid-template-columns: 92px auto 1fr; gap: 8px; align-items: center; min-height: 30px; margin: 2px 0; border-radius: 8px;
+.dp-gap { display: grid; grid-template-columns: 92px auto 1fr auto; gap: 8px; align-items: center; min-height: 30px; margin: 2px 0; border-radius: 8px;
   font-size: 12.5px; color: var(--fg3);
   background-image: repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--fg3) 8%, transparent) 6px 7px); }
 .dp-gap .dp-time { padding-top: 0; color: var(--fg3); }
@@ -480,9 +480,29 @@ html.tdragging, html.tdragging * { -webkit-user-select: none; user-select: none;
 :root[data-theme="dark"] .dp-now { box-shadow: 0 0 10px var(--accent-btn); }
 @media (max-width: 750px) {
   .dp-row, .dp-gap { grid-template-columns: 62px minmax(0, 1fr); }
-  .dp-gap { grid-template-columns: 62px auto 1fr; }
+  .dp-gap { grid-template-columns: 62px auto 1fr auto; }
+  .dp-gap-h { display: none; }
+  html.tdragging .dp-gap .dp-gap-h { display: inline; }
+  .dp-add-in { opacity: .85; }
   .dp-time { font-size: 11.5px; white-space: normal; line-height: 14px; padding-top: 12px; }
   .dp-gap .dp-time { padding-top: 0; }
   .dp-sub { margin-left: 8px; }
   .dp-now span { left: 10px; }
 }
+
+/* Дописывать и переставлять в ленте (24.11.2026): «+» в окне и под блоком, бросок на блок и на «Без часа», время нажатием */
+button.dp-time { background: none; border: 0; font: inherit; font-size: 12.5px; color: var(--fg2); cursor: pointer; border-radius: 6px; }
+button.dp-time:hover { color: var(--accent-text); text-decoration: underline dotted; }
+.dp-gap-add { display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 8px; margin-right: 6px; border-radius: 12px; font-size: 12px;
+  color: var(--accent-text); border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border)); opacity: .7; }
+.dp-gap:hover .dp-gap-add, .dp-gap-add:focus-visible { opacity: 1; }
+.dp-add-in { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 6px 26px; padding: 2px 8px; border-radius: 10px; font-size: 12px; color: var(--fg3); opacity: .55; }
+.dp-row:hover .dp-add-in, .dp-add-in:focus-visible, .dp-add-in.on { opacity: 1; color: var(--accent-text); }
+.dp-row.drop .dp-main { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left-color: var(--accent); border-radius: 0 10px 10px 0; }
+.dp-rest.drop { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); border-radius: 8px; }
+.dp-rest-h { margin-left: auto; font-size: 12px; color: var(--accent-text); font-weight: 400; }
+.m.reach { color: var(--accent-text); text-decoration: none; }
+.m.reach:hover { text-decoration: underline; }
+:root[data-theme="dark"] .dp-row.drop .dp-main { box-shadow: -6px 0 16px -8px var(--accent); }
+:root[data-theme="dark"] .m.reach { text-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent); }
+@media (max-width: 750px) { button.dp-time { font-size: 11.5px; } .dp-add-in { margin-left: 8px; } }

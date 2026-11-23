@@ -3,7 +3,7 @@
 import { setDue } from './acts.ts';
 import { useRef, useState, type DragEvent, type PointerEvent as RPE } from 'react';
 import { deadlineWords, diffDays, dueWords, dueTone, nowHm } from '../dates.ts';
-import { cls, dealShort, labelColor, personName, projectColor } from '../lib.ts';
+import { cls, dealShort, labelColor, personName, projectColor, telLink, tgLink } from '../lib.ts';
 import { completeSoon, ops, S, ticking } from '../store.ts';
 import type { Task } from '../types.ts';
 import { childrenOf, commentCount, placed } from '../views.ts';
@@ -97,6 +97,13 @@ export function Meta({ t, showProject, hideDate, hideDir, inPlan }: { t: Task; s
     const days = t.ball === 'waiting' && t.waiting_since ? diffDays(today, t.waiting_since) : 0;
     items.push(<span key="p" className="m"><Icon name="user" size={12} />{w}{who}{days >= 2 ? ` · ${days} дн.` : ''}</span>);
     if (t.ball === 'waiting' && t.nudge_on && t.nudge_on <= today) items.push(<span key="n" className="m d-over"><Icon name="bell" size={12} />пнуть</span>);
+    // Связь прямо из дела (23.11.2026): «написать» открывает чат Telegram, «позвонить» — номер; клик не открывает дело.
+    if (t.status === 'open') {
+      const tel = /позвон|набрать|созвон/i.test(t.title) ? telLink(t.person_id) : null;
+      const tg = tgLink(t.person_id);
+      if (tel) items.push(<a key="tel" className="m reach" href={tel} onClick={(e) => e.stopPropagation()} title="Позвонить"><Icon name="bell" size={12} />позвонить</a>);
+      if (tg) items.push(<a key="tg" className="m reach" href={tg} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()} title="Написать в Telegram"><Icon name="send" size={12} />написать</a>);
+    }
   }
   for (const l of t.labels || []) items.push(<span key={'l' + l} className="m lbl-chip" style={{ color: labelColor(l) }}><Icon name="tag" size={12} />{l}</span>);
   // Место в дереве жизни (23.11.2026): направление — светящейся точкой своего цвета, цель — рядом. В виде направления
