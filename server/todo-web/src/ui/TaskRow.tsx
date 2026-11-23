@@ -36,6 +36,8 @@ export interface RowOpts {
   hideDir?: boolean;
   /** Кнопка «Разложить» — выбор места в дереве прямо в строке (списки «Без места»): быстрее, чем тащить по одной. */
   placeBtn?: boolean;
+  /** В ленте дня: время — слева в ленте, в строке его нет. */
+  inPlan?: boolean;
 }
 
 export function Checkbox({ t, onDone }: { t: Task; onDone?: () => void }) {
@@ -57,14 +59,16 @@ export function Checkbox({ t, onDone }: { t: Task; onDone?: () => void }) {
   );
 }
 
-export function Meta({ t, showProject, hideDate, hideDir }: { t: Task; showProject?: boolean; hideDate?: boolean; hideDir?: boolean }) {
+export function Meta({ t, showProject, hideDate, hideDir, inPlan }: { t: Task; showProject?: boolean; hideDate?: boolean; hideDir?: boolean; inPlan?: boolean }) {
   const today = S.today;
   const kids = childrenOf(t.id);
   const kidsDone = kids.filter((k) => k.status === 'done').length;
   const comments = commentCount(t.id);
   const proj = t.project_id ? S.projects.get(t.project_id) : null;
   const items = [];
-  if (t.due_date && hideDate && t.due_time) {
+  if (inPlan) {
+    // время — слева в ленте дня
+  } else if (t.due_date && hideDate && t.due_time) {
     items.push(<span key="d" className="m"><Icon name="alarm" size={12} />{t.due_time.slice(0, 5)}{t.recur ? <Icon name="repeat" size={12} /> : null}</span>);
   } else if (t.due_date && hideDate && t.recur) {
     items.push(<span key="d" className="m"><Icon name="repeat" size={12} /></span>);
@@ -81,7 +85,9 @@ export function Meta({ t, showProject, hideDate, hideDir }: { t: Task; showProje
     const near = (Date.parse(t.deadline) - Date.parse(today)) / 864e5 < 7;
     items.push(<span key="dl" className={'m' + (t.deadline < today ? ' d-over' : near ? ' d-tom' : '')}><Icon name="deadline" size={12} />{deadlineWords(t.deadline, today)}</span>);
   }
-  if (kids.length) items.push(<span key="k" className="m"><Icon name="sub" size={12} />{kidsDone}/{kids.length}</span>);
+  // Длительность у дела без часа (23.11.2026): по ней лента дня считает, влезает ли день; у дела с часом она — в ленте.
+  if (t.estimate_min && !t.due_time && t.status === 'open') items.push(<span key="est" className="m est">{t.estimate_min >= 60 ? `${Math.floor(t.estimate_min / 60)} ч${t.estimate_min % 60 ? ' ' + (t.estimate_min % 60) : ''}` : t.estimate_min + ' мин'}</span>);
+  if (kids.length && !inPlan) items.push(<span key="k" className="m"><Icon name="sub" size={12} />{kidsDone}/{kids.length}</span>); // в ленте они «Внутри»
   if (comments) items.push(<span key="c" className="m"><Icon name="comment" size={12} />{comments}</span>);
   if (t.remind_at || t.remind_place) items.push(<span key="r" className="m" title={t.remind_place || ''}><Icon name="alarm" size={12} /></span>);
   if (t.person_id) {
@@ -105,7 +111,7 @@ export function Meta({ t, showProject, hideDate, hideDir }: { t: Task; showProje
     );
   } else if (t.why_id && t.why_goal && t.why_title && !hideDir) items.push(<span key="w" className="m" title="Зачем"><Icon name="target" size={12} />{t.why_title}</span>);
   // Без проекта, но с местом в дереве — не «Входящие» (их там нет): место уже сказал чип направления.
-  if (showProject && (proj || !placed(t))) {
+  if (showProject && (proj || (!placed(t) && !inPlan))) { // в ленте дня «Входящие» у каждой строки — шум
     const where = t.deal_id ? `${proj?.name || ''} / ${dealShort(t.deal_id)}` : proj ? proj.name + (t.section_name ? ' / ' + t.section_name : '') : 'Входящие';
     items.push(
       <span key="pr" className="m where">
@@ -184,7 +190,7 @@ export function TaskRow({ t, opts = {} }: { t: Task; opts?: RowOpts }) {
       <div className="tbody">
         <div className="ttl">{t.title}</div>
         {t.notes ? <div className="tdesc">{t.notes.split('\n')[0]}</div> : null}
-        <Meta t={t} showProject={opts.showProject} hideDate={opts.hideDate} hideDir={opts.hideDir} />
+        <Meta t={t} showProject={opts.showProject} hideDate={opts.hideDate} hideDir={opts.hideDir} inPlan={opts.inPlan} />
         {opts.placeBtn && t.status === 'open' ? (
           <button className="place-btn" onClick={(e) => { e.stopPropagation(); pickPlace(e.currentTarget, t); }}><Icon name="tree" size={13} />Разложить</button>
         ) : null}

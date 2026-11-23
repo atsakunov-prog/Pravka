@@ -11,13 +11,14 @@ import { Icon } from './icons.tsx';
 const isUrl = (s: string) => /^https?:\/\//i.test(s.trim());
 const openEvent = (url: string) => { if (url) window.open(url, '_blank', 'noopener'); };
 
-function EventRow({ e, day, now }: { e: CalEvent; day: string; now: string }) {
+/** Строка встречи; noTime — время уже слева (лента дня). */
+export function EventRow({ e, day, now, noTime }: { e: CalEvent; day: string; now: string; noTime?: boolean }) {
   const ph = phase(e, day, S.today, now);
   const place = e.location && !isUrl(e.location) ? e.location : '';
   return (
     <div className={cls('ev-row', ph, !e.busy && 'free')} role="button" tabIndex={0} onClick={() => openEvent(e.url)}
       title={e.url ? 'Открыть в Google Календаре' : e.title}>
-      <span className="ev-time">{timeWords(e, day)}</span>
+      {noTime ? null : <span className="ev-time">{timeWords(e, day)}</span>}
       <i className="ev-bar" />
       <span className="ev-body">
         <span className="ev-ttl">{e.title}</span>

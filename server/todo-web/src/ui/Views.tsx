@@ -2,8 +2,9 @@
 // дерево целей, выполненные.
 import { api, uuid } from '../api.ts';
 import { CalendarView, CalTray } from './Calendar.tsx';
-import { CalStale, DayEvents, SoonNudge } from './Events.tsx';
-import { dayEvents, soonEvent } from '../cal.ts';
+import { CalStale } from './Events.tsx';
+import { DayPlanView, NowBlock, nowBlock, planFor } from './DayPlan.tsx';
+import { dayEvents } from '../cal.ts';
 import { LEVEL_NAME, projStatus } from '../projstatus.ts';
 import type { Chain } from '../order.ts';
 import { setDue, setPlace } from './acts.ts';
@@ -16,7 +17,7 @@ import { op1, ops, S, saveNowOrder, saveTodo, setTask, todoSettings, toast, useS
 import type { Id, Task } from '../types.ts';
 import {
   completedRecent, dayList, search as searchAll, dealTasks, inbox, labelTasks,
-  listed, liveDeals, mine, nowHm, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays,
+  listed, liveDeals, mine, nowList, overdue, personTasks, projectTasks, sectionsOf, upcomingDays,
 } from '../views.ts';
 import { filterCtx } from './ctx.ts';
 import { DisplayMenu, groupTasks, saveViewOpts, shown, viewOpts } from './Display.tsx';
@@ -43,7 +44,7 @@ function DayTop({ add }: { add: Record<string, unknown> }) {
   const owed = ballCounts().owed;
   const cards: ReactNode[] = [];
   // Встреча идёт или скоро (календарь Google, 23.11.2026) — первой: к ней готовиться или в неё входить.
-  if (soonEvent(nowHm())) cards.push(<SoonNudge key="cal" />);
+  if (nowBlock()) cards.push(<NowBlock key="cal" />);
   const nowLeft = nowList().length;
   if (isEvening() && nowLeft) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="moon" size={18} /><span><b>Итог дня</b><small>{nowLeft} в «Сейчас» — сделать или на завтра</small></span><Icon name="chevR" size={16} /></a>);
   else if (!planDone()) cards.push(<a key="plan" className="nudge n-plan" href="#/plan"><Icon name="sun" size={18} /><span><b>Спланировать день</b><small>что горит и что двигает жизнь — за пару минут</small></span><Icon name="chevR" size={16} /></a>);
@@ -209,12 +210,31 @@ export function InboxView() {
 
 // ── Сегодня ──────────────────────────────────────────────────────────────
 
-export function TodayView() {
+/** «Сегодня | Завтра» (23.11.2026): вечером день планируют на завтра — тот же вид, только другой день. */
+function DayNav({ day }: { day: string }) {
+  const tomorrow = addDays(S.today, 1);
+  return (
+    <span className="segs day-nav">
+      <a href="#/today" className={'seg' + (day === S.today ? ' on' : '')}>Сегодня</a>
+      <a href={'#/day/' + tomorrow} className={'seg' + (day === tomorrow ? ' on' : '')}>Завтра</a>
+    </span>
+  );
+}
+
+/** «Сегодня» — и любой другой день (#/day/ГГГГ-ММ-ДД). Сверху — лента дня (DayPlan.tsx): встречи и дела со своим часом
+ *  по порядку, окна и накладки, под блоком — вопросы к встрече и «в машине можно»; ниже — дела без часа: с завода —
+ *  мяч прежних Дел (Отбить / Запустить / Мониторить, слово владельца 10.10 — «базовая группировка»), в «Отображении» —
+ *  любая другая или «Нет», как у Todoist. Просроченное, полоса дня и подсказки — только у сегодня. */
+export function TodayView({ day }: { day?: string }) {
   useStore();
-  const over = overdue();
-  const today = dayList(S.today);
+  const d = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : S.today;
+  const isToday = d === S.today;
+  const over = isToday ? overdue() : [];
+  const all = dayList(d);
+  const plan = planFor(d);
+  const rest = all.filter((t) => plan.untimed.includes(t));
   const [openOver, setOpenOver] = useState(true);
-  const n = over.length + today.length;
+  const n = over.length + all.length;
   const reschedule = (el: HTMLElement) => openPop(el, (close) => (
     <Scheduler tasks={over} value={{ due_date: null, due_time: null, recur: null, due_rule: null }} close={close} onPick={(v) => {
       // «Без срока» снимает и время, а у повторяющегося сервер снимает и повтор — отмена возвращает всё
@@ -225,13 +245,13 @@ export function TodayView() {
       ops(items).then(() => toast(v.due_date ? T.rescheduled(v.due_date, S.today) : 'Снял срок: ' + plural(over.length, 'задача', 'задачи', 'задач'), () => ops(back).catch(() => {}))).catch(() => {});
     }} />
   ), { cls: 'sched' });
-  const dropToday = { nest: false, onDrop: (d: Task) => { if (d.due_date !== S.today) setDue(d, { due_date: S.today }); } };
-  // «Сегодня» с группировкой (23.11.2026): с завода — мяч прежних Дел (Отбить / Запустить / Мониторить, слово владельца
-  // 10.10 — «базовая группировка»), в «Отображении» — любая другая или «Нет», как у Todoist.
+  const dropDay = { nest: false, onDrop: (t: Task) => { if (t.due_date !== d) setDue(t, { due_date: d }); } };
   const to = viewOpts('today');
-  const todayGroups = groupTasks(today, to.group ?? 'ball');
+  const groups = groupTasks(rest, to.group ?? 'ball');
+  const title = isToday ? 'Сегодня' : d === addDays(S.today, 1) ? 'Завтра' : dayHead(d, S.today)[0];
   return (
-    <Page title="Сегодня" crumbs="Сегодня" top={<><DayStrip /><DayTop add={{ due_date: S.today }} /></>} actions={<DisplayBtn vkey="today" board={false} />} sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
+    <Page title={title} crumbs={<DayNav day={d} />} top={isToday ? <><DayStrip /><DayTop add={{ due_date: S.today }} /></> : null}
+      actions={<DisplayBtn vkey="today" board={false} />} sub={n ? <span><Icon name="done" size={14} /> {plural(n, 'задача', 'задачи', 'задач')}</span> : null}>
       {over.length ? (
         <div className="sect over">
           <div className="sect-h">
@@ -239,33 +259,41 @@ export function TodayView() {
             Просрочено<span className="n">{over.length}</span>
             <span className="right"><button className="act" onClick={(e) => reschedule(e.currentTarget)}>Перенести</button></span>
           </div>
-          {/* drop без своего броска: просроченное тянется — на «Сегодня», день, сетку, вкладку внизу (23.11.2026) */}
+          {/* drop без своего броска: просроченное тянется — на «Сегодня», день, окно ленты, сетку, вкладку внизу (23.11.2026) */}
           {openOver ? <TaskList tasks={over} rowOpts={{ showProject: true }} nest={false} drop={{ nest: false, onDrop: () => {} }} /> : null}
         </div>
       ) : null}
       <div className="sect">
         <div className="sect-h"
           onDragOver={(e) => { if (draggingId()) e.preventDefault(); }}
-          onDrop={(e) => { e.preventDefault(); const d = draggingId() && S.tasks.get(draggingId()!); if (d) dropToday.onDrop(d); }}>
-          {dayHead(S.today, S.today).join(' · ')}<span className="n">{today.length || ''}</span>
+          onDrop={(e) => { e.preventDefault(); const t = draggingId() && S.tasks.get(draggingId()!); if (t) dropDay.onDrop(t); }}>
+          {dayHead(d, S.today).join(' · ')}<span className="n">{all.length || ''}</span>
         </div>
         <CalStale />
-        <DayEvents day={S.today} />
-        {todayGroups.length === 1 && !todayGroups[0].title
-          ? <TaskList tasks={today} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={{ due_date: S.today }} drop={dropToday} />
-          : todayGroups.map((g, i) => (
+        <DayPlanView day={d} />
+        {plan.items.length && rest.length ? <div className="sect-h sub-h dp-rest">Без часа<span className="n">{rest.length}</span></div> : null}
+        {groups.length === 1 && !groups[0].title
+          ? <TaskList tasks={rest} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={{ due_date: d }} drop={dropDay} />
+          : groups.map((g, i) => (
             <div key={g.key} className="sect" style={{ marginTop: i ? 14 : 4 }}>
               <div className="sect-h sub-h">{g.title}<span className="n">{g.tasks.length}</span></div>
-              <TaskList tasks={g.tasks} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={i === todayGroups.length - 1 ? { due_date: S.today } : false} drop={dropToday} />
+              <TaskList tasks={g.tasks} rowOpts={{ showProject: true, hideDate: false }} nest={false} add={i === groups.length - 1 ? { due_date: d } : false} drop={dropDay} />
             </div>
           ))}
       </div>
-      {!n ? <Empty big="Всё сделано!" text={dayEvents(S.today).length ? 'Задач на сегодня нет — только встречи выше.' : 'На сегодня задач нет — хорошего дня.'} /> : null}
+      {!n ? <Empty big={isToday ? 'Всё сделано!' : 'Свободный день'} text={dayEvents(d).length ? 'Задач нет — только встречи выше.' : isToday ? 'На сегодня задач нет — хорошего дня.' : 'Задач на этот день нет.'} /> : null}
     </Page>
   );
 }
 
 // ── Предстоящее ──────────────────────────────────────────────────────────
+
+/** Дела дня «Предстоящего» без часа: дела со своим часом, вопросы к встречам и «заодно» — уже в ленте дня. */
+function untimedOf(day: string, tasks: Task[]): Task[] {
+  const p = planFor(day);
+  const shown = new Set(p.items.flatMap((x) => [x.task?.id, ...x.inside.map((k) => k.id), ...x.along.flatMap((g) => g.tasks.map((k) => k.id))]));
+  return tasks.filter((t) => !shown.has(t.id));
+}
 
 /** «Список | Календарь» у «Предстоящего» (23.11.2026): Todoist даёт тот же выбор; выбор — личный, в настройках вида. */
 function UpLayout({ o }: { o: ReturnType<typeof viewOpts> }) {
@@ -349,8 +377,8 @@ export function UpcomingView() {
             onDrop={(e) => { e.preventDefault(); moveTo(day); }}>
             {dayHead(day, S.today).map((x, i) => <span key={i} className={i ? 'rest' : ''}>{i ? <span className="dot">· </span> : null}{x}</span>)}
           </div>
-          <DayEvents day={day} />
-          <TaskList tasks={tasks} rowOpts={{ showProject: true, hideDate: true }} nest={false} add={{ due_date: day }}
+          <DayPlanView day={day} compact />
+          <TaskList tasks={untimedOf(day, tasks)} rowOpts={{ showProject: true, hideDate: true }} nest={false} add={{ due_date: day }}
             drop={{ nest: false, onDrop: (d) => { if (d.due_date !== day) setDue(d, { due_date: day }); } }} />
         </div>
       ))}

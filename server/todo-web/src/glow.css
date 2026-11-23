@@ -433,3 +433,56 @@ html.tdragging, html.tdragging * { -webkit-user-select: none; user-select: none;
 }
 @keyframes kv-spring { from { box-shadow: inset 0 -3px 0 0 transparent; } to { box-shadow: inset 0 -3px 0 0 var(--accent); } }
 :root[data-theme="dark"] .bottom-nav a.drop { text-shadow: var(--fl-text); }
+
+/* ── Лента дня (23.11.2026, dayplan.ts, ui/DayPlan.tsx): время слева, блоки по порядку, окна, накладки, «внутри» ── */
+.dp { margin: 4px 0 10px; display: flex; flex-direction: column; }
+.dp-cap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; color: var(--fg2); padding: 7px 10px; margin-bottom: 6px;
+  border-radius: 10px; background: color-mix(in srgb, var(--ok) 9%, transparent); }
+.dp-cap b { color: var(--ok); font-weight: 600; margin-left: auto; }
+.dp-cap .dot { color: var(--fg3); }
+.dp-cap.over { background: color-mix(in srgb, var(--d-over) 10%, transparent); }
+.dp-cap.over b { color: var(--d-over); }
+.dp-row { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; align-items: start; }
+.dp-time { font-size: 12.5px; color: var(--fg2); font-variant-numeric: tabular-nums; text-align: right; padding-top: 11px; white-space: nowrap; }
+.dp-main { min-width: 0; border-left: 2px solid var(--border); padding-left: 8px; }
+.dp-row.is-ev .dp-main { border-left-color: transparent; padding-left: 0; }
+.dp-row .ev-row { padding-left: 0; }
+.dp-row .task { border-bottom: 0; }
+.dp-task { display: flex; align-items: center; gap: 8px; }
+.dp-task .task { flex: 1; min-width: 0; }
+.dp-row.past { opacity: .5; }
+.dp-row.live .dp-main { border-left-color: var(--accent); }
+.dp-row.live .dp-time { color: var(--accent-text); font-weight: 600; }
+.dp-row.clash .dp-main { border-left-color: var(--d-over); }
+.dp-row.clash.is-ev .dp-main { border-left-color: var(--d-over); padding-left: 8px; }
+.dp-clash { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--d-over); padding: 0 0 6px 4px; }
+.dp-sub { margin: 0 0 6px 26px; padding: 2px 0 2px 10px; border-left: 2px dashed var(--border); }
+.dp-sub-h { font-size: 11px; font-weight: 700; color: var(--fg3); text-transform: uppercase; letter-spacing: .04em; padding: 4px 0 0; }
+.dp-sub .task { padding-top: 5px; padding-bottom: 5px; }
+.dp-gap { display: grid; grid-template-columns: 92px auto 1fr; gap: 8px; align-items: center; min-height: 30px; margin: 2px 0; border-radius: 8px;
+  font-size: 12.5px; color: var(--fg3);
+  background-image: repeating-linear-gradient(-45deg, transparent 0 6px, color-mix(in srgb, var(--fg3) 8%, transparent) 6px 7px); }
+.dp-gap .dp-time { padding-top: 0; color: var(--fg3); }
+.dp-gap-w { color: var(--ok); font-weight: 600; }
+.dp-gap-h { opacity: 0; justify-self: end; padding-right: 10px; }
+.dp-gap:hover .dp-gap-h, .dp-gap.drop .dp-gap-h, html.tdragging .dp-gap .dp-gap-h { opacity: 1; }
+.dp-gap.drop { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent); color: var(--accent-text); }
+.dp-now { position: relative; height: 0; margin: 5px 0; border-top: 2px solid var(--accent-btn); }
+.dp-now span { position: absolute; left: 44px; top: -9px; font-size: 11px; font-weight: 700; color: var(--accent-btn); background: var(--bg); padding: 0 4px; }
+.dp-rest { margin-top: 10px; }
+.m.est { color: var(--fg3); }
+.segs.day-nav { margin: 0; }
+.segs.day-nav .seg { height: 26px; padding: 0 10px; font-size: 12.5px; }
+:root[data-theme="dark"] .dp-cap { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ok) 18%, transparent); }
+:root[data-theme="dark"] .dp-cap b, :root[data-theme="dark"] .dp-gap-w { text-shadow: 0 0 12px color-mix(in srgb, var(--ok) 45%, transparent); }
+:root[data-theme="dark"] .dp-row.live .dp-main { box-shadow: -6px 0 14px -8px var(--accent); }
+:root[data-theme="dark"] .dp-row.clash .dp-main { box-shadow: -6px 0 14px -8px var(--d-over); }
+:root[data-theme="dark"] .dp-now { box-shadow: 0 0 10px var(--accent-btn); }
+@media (max-width: 750px) {
+  .dp-row, .dp-gap { grid-template-columns: 62px minmax(0, 1fr); }
+  .dp-gap { grid-template-columns: 62px auto 1fr; }
+  .dp-time { font-size: 11.5px; white-space: normal; line-height: 14px; padding-top: 12px; }
+  .dp-gap .dp-time { padding-top: 0; }
+  .dp-sub { margin-left: 8px; }
+  .dp-now span { left: 10px; }
+}

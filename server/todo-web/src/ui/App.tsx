@@ -181,6 +181,7 @@ function Body() {
     case 'now': return <NowView />;
     case 'inbox': return <InboxView />;
     case 'today': return <TodayView />;
+    case 'day': return <TodayView day={id} key={id} />; // любой день, «Завтра» (23.11.2026)
     case 'upcoming': return <UpcomingView />;
     case 'project': return <ProjectView id={id!} key={id} />;
     case 'deal': return <DealView id={id!} key={id} />;
