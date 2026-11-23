@@ -23,7 +23,7 @@ import psycopg
 from psycopg import sql
 from psycopg.types.json import Jsonb
 
-from . import (asks, db, did, digest, focus, guard, ideas, insights, krug, meetings, nest, people, phone, place, spend,
+from . import (asks, cal, db, did, digest, focus, guard, ideas, insights, krug, meetings, nest, people, phone, place, spend,
                todo, twins, zas, zasechka)
 
 log = logging.getLogger("dela.store")
@@ -54,7 +54,9 @@ TASK_FIELDS = {
 FEATURES = ["remind", "svod", "people", "dictations", "groups", "krug", "meetings", "tree", "place", "options",
             "digest", "zasechka", "phone", "spend", "digest_crm", "people_new", "people_link", "meeting_touch", "deal_steps",
             "privacy", "context_index", "claude_guard", "nest", "debug", "capture", "capture_model", "ideas", "did",
-            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers", "todo", "zas"]
+            "remind_phone", "speaker_link", "people_final", "plan", "asks", "talk_answers", "todo", "zas", "cal"]
+# «cal» — календарь Google рядом с делами (dela_0040, 23.11.2026, cal.py): операция cal.put (служба встреч кладёт окно
+# событий), вид cal (since, until) — веб /t рисует встречи в «Сегодня», «Предстоящем» и сетке календаря.
 # «zas» — лента Засечки на сервере (dela_0038, 26.10.2026, zas.py, contract/dela-zas.json): поле zas синка (режим и окно
 # ленты), операции zas.handover (телефон отдаёт ленту один раз) и zas.op (правки веба и мутаторы телефона).
 # «todo» — Дела в виде Todoist (dela_0036, 19.10.2026, todo.py; новый веб /t): у дела priority (1 — p1 … 4 — без
@@ -2899,6 +2901,8 @@ zas.register(HANDLERS, OpError)
 twins.register(VIEWS, OpError, FEATURES)  # и вид calls — звонки для разноски дайджеста (dela_0035, флаг calls)
 # Настройки телефона (dela_0015): снимок от телефона, правка с компьютера, вид phone (phone.py).
 phone.register(HANDLERS, VIEWS, OpError)
+# Календарь Google (dela_0040): окно событий от службы встреч и вид cal (cal.py).
+cal.register(HANDLERS, VIEWS, OpError)
 # Книга трат Claude (dela_0017): итоги дней от телефона и сборщика «Дома», «советы прочитаны», вид spend (spend.py).
 spend.register(HANDLERS, VIEWS, OpError)
 # «Только тебе» (dela_0027, аудит №8–11; место этапа 6): наблюдения только владельцу — insight.*, вид insights.

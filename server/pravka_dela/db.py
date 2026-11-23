@@ -64,6 +64,10 @@ APP_TABLES = {
     "crm.phone_edits": "SELECT, INSERT, UPDATE",
     # Книга трат Claude и недельные советы (dela_0017): строки не удаляются — книга итогов дней и советы недель.
     "crm.claude_spend": "SELECT, INSERT, UPDATE",
+    # Календарь Google (dela_0040): зеркало окна событий — служба встреч заменяет окно целиком, пропавшее в Google
+    # удаляется; когда клала последний раз — одна строка на человека.
+    "crm.cal_events": "SELECT, INSERT, UPDATE, DELETE",
+    "crm.cal_sync": "SELECT, INSERT, UPDATE",
     "crm.claude_tips": "SELECT, INSERT, UPDATE",
     # «Только тебе» (dela_0027): наблюдения только владельцу Дел; строки не удаляются (deleted_at), журнала нет.
     "crm.insights": "SELECT, INSERT, UPDATE",
