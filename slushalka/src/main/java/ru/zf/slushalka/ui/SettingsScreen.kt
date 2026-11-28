@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import ru.zf.slushalka.BuildConfig
 import ru.zf.slushalka.SlushalkaApp
@@ -259,8 +260,10 @@ fun SettingsScreen(app: SlushalkaApp, onBack: () -> Unit, onPickTree: () -> Unit
                 onDispose { app.readAloud.hold(false) }
             }
             val speech by app.readAloud.state.collectAsState()
+            ServerVoiceSettings(app, prefs)
+            Text("Голос телефона", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 10.dp))
             Note(
-                "Книгу без записи читает вслух синтез речи телефона: кнопка «Озвучить» в " +
+                "Без голоса сервера (или когда он недоступен) книгу читает синтез речи телефона: кнопка «Озвучить» в " +
                     "читалке. Голос - тот, что установлен в системе: у Google и Samsung есть " +
                     "русские голоса получше заводского, их докачивают в настройках синтеза " +
                     "речи (кнопка ниже), а здесь выбирают. Голоса с пометкой «сеть» звучат " +
@@ -596,6 +599,82 @@ private fun ModelPicker(
             )
         }
     }
+}
+
+/**
+ * Голос сервера (28.11.2026): включатель, голоса полки озвучки и проба. Голоса
+ * берутся у сервера (полка - его правда), выбор помнится здесь и сразу
+ * подхватывается озвучкой, которая идёт.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ServerVoiceSettings(app: SlushalkaApp, prefs: Settings.Prefs) {
+    val scope = rememberCoroutineScope()
+    val voice = app.readAloud.server
+    val door = voice.baseUrl(prefs)
+    var voices by remember { mutableStateOf<List<ru.zf.slushalka.speech.ServerVoice.VoiceInfo>?>(null) }
+    var defaultId by remember { mutableStateOf("") }
+    var url by remember { mutableStateOf(prefs.ttsServerUrl) }
+    androidx.compose.runtime.LaunchedEffect(door, prefs.cloudUser, prefs.cloudPass) {
+        voices = null
+        if (door == null) return@LaunchedEffect
+        val (list, def) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { voice.voices() }
+        voices = list
+        defaultId = def
+    }
+    Toggle("Голос сервера", prefs.ttsServer) {
+        scope.launch { app.settings.setTtsServer(it) }
+    }
+    Note(
+        "Читает голос с полки озвучки на домашнем сервере - те же чтецы, что у машинных аудиокниг. " +
+            "Звук идёт потоком: первое слово через секунду-две, дальше без пауз. Нужен интернет. " +
+            "Сервер занят расшифровкой встречи или недоступен - дочитывает голос телефона."
+    )
+    if (!prefs.ttsServer) return
+    when {
+        door == null -> Text(
+            "Нужна библиотека на сервере: голос сервера живёт рядом с ней (раздел «Облако»).",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        voices == null -> Text("Спрашиваю у сервера голоса…", style = MaterialTheme.typography.bodyMedium)
+        voices!!.isEmpty() -> Text(
+            "Сервер не ответил: голоса покажутся, когда он будет на связи.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val chosen = prefs.ttsServerVoice.ifBlank { defaultId }
+            voices!!.forEach { v ->
+                FilterChip(
+                    selected = chosen == v.id,
+                    onClick = {
+                        scope.launch {
+                            app.settings.setTtsServerVoice(v.id)
+                            // снимок настроек догоняет запись не мгновенно - озвучка должна взять новый голос
+                            kotlinx.coroutines.withTimeoutOrNull(2000) {
+                                app.settings.flow.first { it.ttsServerVoice == v.id }
+                            }
+                            app.readAloud.serverVoiceChanged()
+                        }
+                    },
+                    label = { Text(v.name) },
+                )
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { app.readAloud.sampleServer() }, enabled = door != null) { Text("Послушать") }
+    }
+    OutlinedTextField(
+        value = url,
+        onValueChange = {
+            url = it
+            scope.launch { app.settings.setTtsServerUrl(it) }
+        },
+        label = { Text("Адрес голоса сервера") },
+        placeholder = { Text("пусто - рядом с библиотекой") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
 }
 
 @Composable

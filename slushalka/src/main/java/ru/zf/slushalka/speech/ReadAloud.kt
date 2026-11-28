@@ -67,9 +67,33 @@ class ReadAloud(private val app: SlushalkaApp) {
         /** Движок поднялся и говорит по-русски. */
         val ready: Boolean = false,
         val error: String? = null,
+        /** Читает голос сервера (а не синтез телефона). */
+        val server: Boolean = false,
+        /** Голос сервера готовится: первое слово ещё не пришло. */
+        val preparing: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State(rate = app.settings.now().ttsRate))
+
+    /**
+     * Голос сервера (28.11.2026): тот же «Озвучить», но читает голос с полки
+     * озвучки на домашней видеокарте. Куски, место чтения, подсветка, шторка и
+     * фокус звука - здесь же, общие; меняется только, кто говорит. Сервер
+     * недоступен или занят встречей - договаривает синтез телефона с того же
+     * места, а строка ошибки объясняет почему.
+     */
+    val server = ServerVoice(app.settings)
+
+    /** Голос сервера отказал в этом включении озвучки - до «Стоп» читает телефон. */
+    private var serverDown = false
+    private var serverRetries = 0
+
+    private fun useServer(): Boolean = !serverDown && server.available()
+
+    /** Книга без записи открыта в читалке: пусть сервер заранее поднимет модель в память. */
+    fun warmServer() {
+        if (server.available()) server.warm()
+    }
     val state: StateFlow<State> = _state
 
     private val main = Handler(Looper.getMainLooper())
@@ -241,6 +265,10 @@ class ReadAloud(private val app: SlushalkaApp) {
         val r = rate.coerceIn(0.5f, 2.5f)
         runCatching { tts?.setSpeechRate(r) }
         _state.value = _state.value.copy(rate = r)
+        if (_state.value.server) {
+            server.setRate(r)               // у звука с сервера темп меняется на лету, без перезапуска
+            return
+        }
         restartCurrent()
     }
 
@@ -249,6 +277,29 @@ class ReadAloud(private val app: SlushalkaApp) {
         val s = _state.value
         if (!s.active || !s.speaking) return
         speakFrom(current, s.charOffset)
+    }
+
+    /** Выбрали другой голос сервера в настройках - читающий сейчас переходит на него с той же фразы. */
+    fun serverVoiceChanged() {
+        val s = _state.value
+        if (s.server) restartCurrent()
+    }
+
+    /** Проба голоса сервера для настроек: одна фраза выбранным голосом. */
+    fun sampleServer() {
+        if (_state.value.speaking || !server.available()) return
+        server.start(
+            items = { i -> if (i == 0) "Здравствуйте! Я буду читать вам книги, когда у них нет записи." else null },
+            rate = _state.value.rate,
+            listener = object : ServerVoice.Listener {
+                override fun onPlaying(item: Int, from: Int, to: Int) = Unit
+                override fun onFinished() = Unit
+                override fun onFailed(message: String, retry: Boolean) {
+                    _state.value = _state.value.copy(error = "Голос сервера: $message")
+                }
+                override fun onPreparing(on: Boolean) = Unit
+            },
+        )
     }
 
     /** Короткая проба голоса - для настроек. */
@@ -284,6 +335,9 @@ class ReadAloud(private val app: SlushalkaApp) {
         lastSavedBlock = -1
         errorsInRow = 0
         stallKicked = false
+        serverDown = false
+        serverRetries = 0
+        serverNote = null
         _state.value = _state.value.copy(
             bookId = book.id, title = book.title, active = true, error = null,
         )
@@ -307,13 +361,14 @@ class ReadAloud(private val app: SlushalkaApp) {
         if (!s.active || !s.speaking) return
         generation++
         runCatching { tts?.stop() }
+        server.stop()                  // продолжение - новым сеансом с этой фразы: сервер бросит старый сам
         main.removeCallbacks(stallWatch)
         if (!keepFocus) {
             abandonFocus()
             // Пауза кнопкой: к ней могут не вернуться до утра - движок отпускается.
             scheduleRelease(PAUSED_HOLD_MS)
         }
-        _state.value = s.copy(speaking = false)
+        _state.value = s.copy(speaking = false, preparing = false)
         app.journal.stopped(s.charOffset.toLong())
     }
 
@@ -353,6 +408,9 @@ class ReadAloud(private val app: SlushalkaApp) {
         val s = _state.value
         generation++
         runCatching { tts?.stop() }
+        server.stop()
+        serverDown = false
+        serverNote = null
         main.removeCallbacks(stallWatch)
         abandonFocus()
         pausedByFocus = false
@@ -366,6 +424,7 @@ class ReadAloud(private val app: SlushalkaApp) {
 
     private fun speakFrom(index: Int, fromChar: Int? = null) {
         val t = text ?: return
+        if (useServer()) return speakServer(index, fromChar)
         val engine = tts
         if (engine == null || !ready) {
             // Движок отпущен или ещё поднимается: договорим, как только он ответит.
@@ -400,12 +459,108 @@ class ReadAloud(private val app: SlushalkaApp) {
         requestFocus()
         ContextCompat.startForegroundService(app, Intent(app, ReadAloudService::class.java))
         _state.value = _state.value.copy(
-            active = true, speaking = true, error = null,
+            active = true, speaking = true, error = serverNote, server = false, preparing = false,
             charOffset = piece.start,
             range = piece.start..(piece.start + piece.text.length),
             chapter = t.chapterAt(piece.start)?.title.orEmpty(),
         )
         enqueueUpTo(index + 1, gen)
+    }
+
+    // ------------------------------------------------------- голос сервера
+
+    /** Почему читает телефон, хотя выбран голос сервера: держится в строке ошибки до «Стоп». */
+    private var serverNote: String? = null
+
+    /** Тот же кусок, что у синтеза телефона, - только читает сервер, потоком, с этой фразы и дальше по книге. */
+    private fun speakServer(index: Int, fromChar: Int?) {
+        val t = text ?: return
+        if (index >= pieces.size) return finish()
+        generation++
+        val gen = generation
+        runCatching { tts?.stop() }
+        main.removeCallbacks(stallWatch)
+        main.removeCallbacks(releaseIdle)
+        cutIndex = -1
+        cutPiece = null
+        var piece = pieces[index]
+        if (fromChar != null && fromChar > piece.start + 40 && fromChar < piece.end) {
+            val cut = t.sentenceAt(fromChar).first.coerceIn(piece.start, piece.end)
+            if (cut > piece.start) {
+                piece = Piece(cut, piece.text.substring(cut - piece.start), piece.block)
+                cutIndex = index
+                cutPiece = piece
+            }
+        }
+        current = index
+        requestFocus()
+        ContextCompat.startForegroundService(app, Intent(app, ReadAloudService::class.java))
+        _state.value = _state.value.copy(
+            active = true, speaking = true, error = null, server = true, preparing = true,
+            charOffset = piece.start,
+            range = null,
+            chapter = t.chapterAt(piece.start)?.title.orEmpty(),
+        )
+        val base = index
+        server.start(
+            items = { i -> pieceAt(base + i)?.text },
+            rate = _state.value.rate,
+            listener = object : ServerVoice.Listener {
+                override fun onPlaying(item: Int, from: Int, to: Int) {
+                    if (gen == generation) serverPlaying(base + item, from, to)
+                }
+
+                override fun onFinished() {
+                    if (gen == generation) finish()
+                }
+
+                override fun onFailed(message: String, retry: Boolean) {
+                    if (gen == generation) serverFailed(message, retry)
+                }
+
+                override fun onPreparing(on: Boolean) {
+                    if (gen == generation) _state.value = _state.value.copy(preparing = on)
+                }
+            },
+        )
+    }
+
+    private fun serverPlaying(index: Int, from: Int, to: Int) {
+        val t = text ?: return
+        val piece = pieceAt(index) ?: return
+        // Сервер считает знаки по-питоновски (кодовыми точками), строка Kotlin - UTF-16.
+        fun at(cp: Int) = piece.start + runCatching { piece.text.offsetByCodePoints(0, cp) }
+            .getOrElse { cp.coerceIn(0, piece.text.length) }
+        val a = at(from)
+        val b = at(to).coerceAtLeast(a)
+        current = index
+        serverRetries = 0
+        _state.value = _state.value.copy(
+            speaking = true, preparing = false,
+            charOffset = a, range = a..b,
+            chapter = t.chapterAt(a)?.title.orEmpty(),
+        )
+        if (piece.block != lastSavedBlock) {
+            lastSavedBlock = piece.block
+            app.state.saveReadChar(piece.start)
+        }
+        _state.value.bookId?.let { app.journal.aloud(it, a) }
+    }
+
+    private fun serverFailed(message: String, retry: Boolean) {
+        val s = _state.value
+        if (!s.active) return
+        if (retry && serverRetries < 2) {
+            // Связь мигнула или сервер перезапустился - тот же голос с той же фразы.
+            serverRetries++
+            speakServer(current.coerceAtLeast(0), s.charOffset)
+            return
+        }
+        // Сервер занят встречей или недоступен - книга не встаёт: дальше читает телефон.
+        serverDown = true
+        serverNote = "Голос сервера: $message. Читает телефон."
+        _state.value = s.copy(server = false, preparing = false, error = serverNote)
+        speakFrom(current.coerceAtLeast(0), s.charOffset)
     }
 
     /** Держим в очереди читаемый кусок и следующий: без пауз между абзацами. */

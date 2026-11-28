@@ -357,6 +357,12 @@ fun ReaderScreen(
         }
     }
 
+    // Книга без записи: «Озвучить» прочтёт голос сервера - пусть он заранее
+    // поднимет модель в память, тогда первое слово - через секунду-две, а не 20.
+    LaunchedEffect(book?.id) {
+        if (book?.hasAudio == false) app.readAloud.warmServer()
+    }
+
     val t = text
     val bk = book
     if (t == null || bk == null) {
@@ -1156,6 +1162,11 @@ fun ReaderScreen(
                                 selection = null
                             },
                             onDictionary = { dictWord = quoteOf(sel) },
+                            // «Нажал на абзац - "Озвучить"» (28.11.2026): с начала выделенного и дальше по книге.
+                            onSpeak = if (bk.hasAudio) null else ({
+                                selection = null
+                                app.readAloud.start(bk, t, sel.first)
+                            }),
                             onCopy = {
                                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(quoteOf(sel)))
                                 notice = "Скопировал"
@@ -1181,6 +1192,7 @@ fun ReaderScreen(
                                 SpeedButton(speech.rate, size = 40.dp) { showRate = true }
                                 TextButton(onClick = { app.readAloud.stop() }) { Text("Стоп", color = palette.fg) }
                             }
+                            if (speech.preparing) Text("Готовлю голос…", color = palette.dim, fontSize = 12.sp)
                             speech.error?.let { err -> Text(err, color = palette.dim, fontSize = 12.sp) }
                         }
 
@@ -1701,6 +1713,8 @@ private fun ColumnScope.SelectionBar(
     onMore: () -> Unit,
     onClear: () -> Unit,
     onDictionary: () -> Unit,
+    /** null - у книги есть запись: озвучивать нечего, слушают её. */
+    onSpeak: (() -> Unit)? = null,
 ) {
     Row(Modifier.padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1719,6 +1733,7 @@ private fun ColumnScope.SelectionBar(
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         BarAction(androidx.compose.material.icons.Icons.Default.Create, "Заметка", palette, onClick = onNote)
         BarAction(Glyphs.Brush, "Маркер", palette, onClick = onMarker)
+        if (onSpeak != null) BarAction(Glyphs.RecordVoiceOver, "Озвучить", palette, onClick = onSpeak)
         BarAction(Glyphs.QuestionAnswer, "Спросить", palette, onClick = onAsk)
         BarAction(Glyphs.TravelExplore, "Контекст", palette, onClick = onContext)
         // Словарь - как в любой читалке: слово уходит в словарь устройства.

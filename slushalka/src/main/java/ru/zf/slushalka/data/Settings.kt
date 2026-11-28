@@ -184,6 +184,12 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         // имя из движка (у Google это «ru-ru-x-…»), пусто - какой движок даст.
         val ttsRate: Float = 1.0f,
         val ttsVoice: String = "",
+        // Голос сервера (28.11.2026): читает голос с полки озвучки на домашней
+        // видеокарте, потоком. Голос - id с полки сервера, пусто - его заводской
+        // (Авраам); адрес двери - пусто: из адреса облака книг (books. → knigi.).
+        val ttsServer: Boolean = true,
+        val ttsServerVoice: String = "",
+        val ttsServerUrl: String = "",
         // Советник в каталоге: кто отвечает, с каким усилием, ходить ли в интернет.
         val adviseModel: String = MODEL_OPUS,
         val adviseEffort: String = "",
@@ -322,6 +328,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
                     ?: DEFAULT_FLIBUSTA_URL,
                 ttsRate = p[KEY_TTS_RATE] ?: 1.0f,
                 ttsVoice = p[KEY_TTS_VOICE] ?: "",
+                ttsServer = p[KEY_TTS_SERVER] ?: true,
+                ttsServerVoice = p[KEY_TTS_SERVER_VOICE] ?: "",
+                ttsServerUrl = p[KEY_TTS_SERVER_URL] ?: "",
                 adviseModel = p[KEY_ADVISE_MODEL]?.takeIf { it in MODELS } ?: MODEL_OPUS,
                 adviseEffort = p[KEY_ADVISE_EFFORT]?.takeIf { it in EFFORTS } ?: "",
                 adviseWeb = p[KEY_ADVISE_WEB] ?: true,
@@ -517,6 +526,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
     suspend fun setFlibustaUrl(v: String) = edit { it[KEY_FLIBUSTA] = v.trim() }
     suspend fun setTtsRate(v: Float) = edit { it[KEY_TTS_RATE] = v.coerceIn(0.5f, 2.5f) }
     suspend fun setTtsVoice(v: String) = edit { it[KEY_TTS_VOICE] = v }
+    suspend fun setTtsServer(v: Boolean) = edit { it[KEY_TTS_SERVER] = v }
+    suspend fun setTtsServerVoice(v: String) = edit { it[KEY_TTS_SERVER_VOICE] = v }
+    suspend fun setTtsServerUrl(v: String) = edit { it[KEY_TTS_SERVER_URL] = v.trim() }
     suspend fun setAdviseModel(v: String) = edit { if (v in MODELS) it[KEY_ADVISE_MODEL] = v }
     suspend fun setAdviseEffort(v: String) = edit { if (v in EFFORTS) it[KEY_ADVISE_EFFORT] = v }
     suspend fun setAdviseWeb(v: Boolean) = edit { it[KEY_ADVISE_WEB] = v }
@@ -994,6 +1006,9 @@ class Settings(private val context: Context, scope: CoroutineScope) {
         private val KEY_FLIBUSTA = stringPreferencesKey("flibusta_url")
         private val KEY_TTS_RATE = floatPreferencesKey("tts_rate")
         private val KEY_TTS_VOICE = stringPreferencesKey("tts_voice")
+        private val KEY_TTS_SERVER = booleanPreferencesKey("tts_server")
+        private val KEY_TTS_SERVER_VOICE = stringPreferencesKey("tts_server_voice")
+        private val KEY_TTS_SERVER_URL = stringPreferencesKey("tts_server_url")
         private val KEY_ADVISE_MODEL = stringPreferencesKey("advise_model_55")
         private val KEY_ADVISE_EFFORT = stringPreferencesKey("advise_effort")
         private val KEY_ADVISE_WEB = booleanPreferencesKey("advise_web")

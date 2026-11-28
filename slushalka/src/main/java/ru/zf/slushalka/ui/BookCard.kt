@@ -294,7 +294,13 @@ internal fun BookCard(
                     )
                 }
                 if (has.razbor) add(Fact(Glyphs.Lightbulb, "Разбор книги", "о книге, главы, идеи, за 15 минут"))
-                if (!has.audio && has.text) add(Fact(Glyphs.RecordVoiceOver, "Без записи", "читает голос телефона - «Озвучить» в читалке"))
+                if (!has.audio && has.text) add(
+                    Fact(
+                        Glyphs.RecordVoiceOver, "Без записи",
+                        if (app.readAloud.server.available()) "читает голос сервера - «Озвучить» в читалке"
+                        else "читает голос телефона - «Озвучить» в читалке",
+                    ),
+                )
             }
             facts.forEach { f -> FactRow(f) }
             where?.let {
