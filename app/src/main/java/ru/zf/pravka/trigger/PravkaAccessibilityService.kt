@@ -285,12 +285,15 @@ class PravkaAccessibilityService : AccessibilityService() {
     @Volatile internal var cachedNetwork: Boolean = false
     /** Итог тейка «П» — с компа (`core/PcAsr.kt`, 20.11.2026): Settings.speechFinalFlow. */
     @Volatile internal var cachedFinalPc: Boolean = true
-    /** Застревания компа подряд — два переключают итог на Google. Живёт, пока жива служба. */
+    /** Застревания компа подряд — два ставят итог на паузу (`PcAsr.Pause`). Живёт, пока жива служба. */
     private val pcBreaker = ru.zf.pravka.core.PcAsr.Breaker()
+    /** Пауза сторожа итога: до какого мига итог от Google, хотя выбран комп (28.11.2026). */
+    @Volatile private var finalPause = ru.zf.pravka.core.PcAsr.Pause()
     /** Строка в пилюле «П» — с компа (`core/LineMux.kt`, 20.11.2026): Settings.speechLiveFlow. */
     @Volatile internal var cachedLivePc: Boolean = true
-    /** Строка компа застревала тейк за тейком — два подряд переключают строку на Google. */
+    /** Строка компа застревала тейк за тейком — два подряд ставят строку на паузу. */
     private val liveBreaker = ru.zf.pravka.core.PcAsr.Breaker()
+    @Volatile private var livePause = ru.zf.pravka.core.PcAsr.Pause()
 
     /**
      * Тейк «П» и комп (20.11.2026): отправка звука ([stream], null — компа в тейке нет), выбор итога и
@@ -423,10 +426,18 @@ class PravkaAccessibilityService : AccessibilityService() {
             app.settings.speechBiasingFlow.collect { cachedBiasingOn = it }
         }
         scope.launch {
+            // Выбор, который прежний сторож переписал на Google насовсем, — снова «Компьютер» (28.11.2026).
+            runCatching { app.settings.unstickSpeechAutoFlips() }
             app.settings.speechFinalFlow.collect { cachedFinalPc = it == ru.zf.pravka.core.PcAsr.FINAL_PC }
         }
         scope.launch {
             app.settings.speechLiveFlow.collect { cachedLivePc = it == ru.zf.pravka.core.PcAsr.FINAL_PC }
+        }
+        scope.launch {
+            app.settings.speechFinalPauseFlow.collect { finalPause = it }
+        }
+        scope.launch {
+            app.settings.speechLivePauseFlow.collect { livePause = it }
         }
         scope.launch {
             app.settings.speechNetworkFlow.collect {
@@ -1046,9 +1057,11 @@ class PravkaAccessibilityService : AccessibilityService() {
         ru.zf.pravka.data.DiskWriter.post { runCatching { app.takeAudio.prune() } }
         val tape = app.takeAudio.newFile()
         // Итог и строка с компа (`core/PcAsr.kt`, `core/LineMux.kt`): тот же звук своей записи — ещё и
-        // домой, по ходу тейка. Выбор фиксируем на старте, как путь Google.
-        val finalPc = cachedFinalPc
-        val livePc = cachedLivePc
+        // домой, по ходу тейка. Выбор фиксируем на старте, как путь Google. Пауза сторожа (комп
+        // застревал) — этот тейк от Google, выбор «Компьютер» остаётся.
+        val wall = System.currentTimeMillis()
+        val finalPc = cachedFinalPc && !finalPause.active(wall)
+        val livePc = cachedLivePc && !livePause.active(wall)
         val pc = if (finalPc || livePc) newPcStream(tape) else null
         val take = PcTake(
             stream = pc,
@@ -1399,20 +1412,33 @@ class PravkaAccessibilityService : AccessibilityService() {
                 if (outcome == ru.zf.pravka.core.PcAsr.Outcome.INCOMPLETE) " — подвела дорога, не в счёт" else "")
         }
         if (!liveBreaker.note(outcome)) return
-        val at = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru")).format(java.util.Date())
-        val note = "$at: строка компа отставала ${ru.zf.pravka.core.PcAsr.STUCK_IN_A_ROW} тейка подряд — строка переключена на Google"
+        val now = System.currentTimeMillis()
+        val p = livePause.next(now)
+        livePause = p                                  // следующий тейк уже на паузе, не ждём записи на диск
+        val fmt = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru"))
+        val till = java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru")).format(java.util.Date(p.until))
+        val note = "${fmt.format(java.util.Date(now))}: строка компа отставала ${ru.zf.pravka.core.PcAsr.STUCK_IN_A_ROW} " +
+            "тейка подряд — до $till строка от Google, потом снова комп"
         app.eventLog.add("строка с компа: $note")
-        app.appScope.launch { app.settings.setSpeechLive(ru.zf.pravka.core.PcAsr.FINAL_GOOGLE, note) }
-        Feedback.toast(this, "Строка с компа отстаёт — в пилюле снова Google. Вернуть: Настройки → Микрофон")
+        app.appScope.launch { app.settings.setSpeechLivePause(p, note) }
+        Feedback.toast(this, "Строка с компа отстаёт — до $till в пилюле Google, потом снова комп")
     }
 
-    /** Два застревания подряд: итог — снова от Google, причина — в настройках и записке. */
+    /**
+     * Два застревания подряд: пауза — итог от Google до конца паузы, потом снова комп сам (28.11.2026:
+     * прежде выбор переписывался на Google насовсем и залипал). Причина — в настройках и записке.
+     */
     private fun flipToGoogle(why: String) {
-        val at = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru")).format(java.util.Date())
-        val note = "$at: комп застрял ${ru.zf.pravka.core.PcAsr.STUCK_IN_A_ROW} тейка подряд ($why) — итог переключён на Google"
+        val now = System.currentTimeMillis()
+        val p = finalPause.next(now)
+        finalPause = p
+        val fmt = java.text.SimpleDateFormat("dd.MM HH:mm", java.util.Locale("ru"))
+        val till = java.text.SimpleDateFormat("HH:mm", java.util.Locale("ru")).format(java.util.Date(p.until))
+        val note = "${fmt.format(java.util.Date(now))}: комп застрял ${ru.zf.pravka.core.PcAsr.STUCK_IN_A_ROW} тейка " +
+            "подряд ($why) — до $till итог от Google, потом снова комп"
         app.eventLog.add("итог с компа: $note")
-        app.appScope.launch { app.settings.setSpeechFinal(ru.zf.pravka.core.PcAsr.FINAL_GOOGLE, note) }
-        Feedback.toast(this, "Комп застревает — итог диктовки снова от Google. Вернуть: Настройки → Микрофон")
+        app.appScope.launch { app.settings.setSpeechFinalPause(p, note) }
+        Feedback.toast(this, "Комп застревает — до $till итог от Google, потом снова комп")
     }
 
     private fun onLiveDone(

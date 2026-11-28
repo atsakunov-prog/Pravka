@@ -141,6 +141,27 @@ internal class GroupStatus(val text: String, val ok: Boolean? = null, val dot: B
  * синхронизатор помнит ошибку — её (правило 6: молчаливая механика читается
  * как поломка).
  */
+/**
+ * Под выбором «Компьютер / Google»: идёт пауза сторожа (`PcAsr.Pause`, 28.11.2026) — до какого
+ * времени Google и «Вернуть сейчас»; паузы нет — прошлая причина строкой, как раньше.
+ */
+@Composable
+private fun SpeechPauseNote(onPc: Boolean, pause: ru.zf.pravka.core.PcAsr.Pause, note: String, onClear: () -> Unit) {
+    val now = System.currentTimeMillis()
+    if (onPc && pause.active(now)) {
+        val till = java.text.SimpleDateFormat("HH:mm", Locale("ru")).format(java.util.Date(pause.until))
+        Text(
+            "Пауза: комп застревал — до $till Google, потом снова комп, сам." +
+                if (note.isNotBlank()) "\n$note" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        PaperButton("Вернуть сейчас", onClick = onClear)
+    } else if (note.isNotBlank()) {
+        Text(note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @Composable
 internal fun groupStatus(app: PravkaApp, g: SettingsGroup): GroupStatus? {
     val s = app.settings
@@ -1168,14 +1189,14 @@ private fun VoiceSettings(app: PravkaApp) {
                     "уходит домой, и итог считает GigaAM-v3 на компе (как «Диктовка» там): он " +
                     "не теряет куски и ровнее на длинных фразах. На «стоп» Правка ждёт ответ " +
                     "компа до 2,5 с; не дождалась или дома нет связи — вставляет текст Google, " +
-                    "ничего не теряется. Комп застрял два тейка подряд — выбор сам переключается " +
-                    "на Google, причина — строкой ниже. Звук для компа даёт своя запись — нужен " +
-                    "«Микрофон держит Правка».",
+                    "ничего не теряется. Комп застрял два тейка подряд — десять минут итог от " +
+                    "Google, потом снова комп, сам (застрял опять вскоре — пауза вдвое длиннее, " +
+                    "до двух часов); выбор при этом не меняется, причина — строкой ниже. Звук для " +
+                    "компа даёт своя запись — нужен «Микрофон держит Правка».",
             )
         }
-        if (finalNote.isNotBlank()) {
-            Text(finalNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        val finalPause by settings.speechFinalPauseFlow.collectAsState(initial = ru.zf.pravka.core.PcAsr.Pause())
+        SpeechPauseNote(onPc, finalPause, finalNote) { scope.launch { settings.clearSpeechFinalPause() } }
         // Строка в пилюле — с компа или от Google (20.11.2026, `core/LineMux.kt`; владелец: «в компьютере
         // всё прямо показывается по моментам, когда я диктую. И это с Гигой… тоже с переключением»).
         val live by settings.speechLiveFlow.collectAsState(initial = ru.zf.pravka.core.PcAsr.FINAL_PC)
@@ -1196,16 +1217,16 @@ private fun VoiceSettings(app: PravkaApp) {
                     "«Диктовки»: звук уходит домой каждые полсекунды, и в пилюле то же, что потом " +
                     "вставится. Первые слова — примерно через секунду, позже, чем у Google. Строка " +
                     "компа отстала больше чем на 2 с (метро, плохая связь) — в пилюле Google, " +
-                    "пока комп не догонит; так два тейка подряд — выбор сам переключается на Google. " +
+                    "пока комп не догонит; так два тейка подряд — десять минут строка от Google, " +
+                    "потом снова комп, выбор не меняется. " +
                     "Google слушает всегда — он и запас, и мерка: в каждом тейке пишется, когда " +
                     "появлялись слова у него и у компа. Кто пишет сейчас — видно по цвету: белая " +
                     "строка — комп (и «· Гига» в «слушаю»), голубоватая — Google. Оба выбора разом " +
                     "переключает первый кружок в веере шестерёнки: «Г» — комп, «G» — Google.",
             )
         }
-        if (liveNote.isNotBlank()) {
-            Text(liveNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        val livePause by settings.speechLivePauseFlow.collectAsState(initial = ru.zf.pravka.core.PcAsr.Pause())
+        SpeechPauseNote(liveOnPc, livePause, liveNote) { scope.launch { settings.clearSpeechLivePause() } }
         if ((onPc || liveOnPc) && !ownMic) {
             Text(
                 "Без «Микрофон держит Правка» звука для компа нет — и итог, и строка от Google.",

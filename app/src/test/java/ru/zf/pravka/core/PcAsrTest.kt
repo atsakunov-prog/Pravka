@@ -63,6 +63,29 @@ class PcAsrTest {
     }
 
     @Test
+    fun `пауза сторожа — десять минут, выбор остаётся, потом снова комп`() {
+        val t0 = 1_800_000_000_000L
+        val p = PcAsr.Pause().next(t0)
+        assertEquals(PcAsr.PAUSE_MS, p.len)
+        assertFalse(PcAsr.onPc(PcAsr.FINAL_PC, p, t0 + 60_000L))          // идёт пауза — Google
+        assertTrue(PcAsr.onPc(PcAsr.FINAL_PC, p, t0 + PcAsr.PAUSE_MS))     // кончилась — снова комп, сам
+        assertFalse(PcAsr.onPc(PcAsr.FINAL_GOOGLE, PcAsr.Pause(), t0))    // выбран Google руками — Google
+        assertTrue(PcAsr.onPc(PcAsr.FINAL_PC, PcAsr.Pause(), t0))         // паузы не было — комп
+    }
+
+    @Test
+    fun `застревает снова вскоре после паузы — вдвое длиннее, не больше двух часов, через час — снова десять минут`() {
+        val t0 = 1_800_000_000_000L
+        var p = PcAsr.Pause().next(t0)
+        p = p.next(p.until + 5 * 60_000L)                                  // через 5 мин после конца
+        assertEquals(2 * PcAsr.PAUSE_MS, p.len)
+        repeat(10) { p = p.next(p.until + 60_000L) }
+        assertEquals(PcAsr.PAUSE_MAX_MS, p.len)
+        val later = p.next(p.until + PcAsr.PAUSE_RECENT_MS + 1)            // спокойный час — с начала
+        assertEquals(PcAsr.PAUSE_MS, later.len)
+    }
+
+    @Test
     fun `имя тейка — имя файла звука без wav`() {
         assertEquals("take_1795180000000", PcAsr.takeId("take_1795180000000.wav"))
         assertNull(PcAsr.takeId("../x.wav"))

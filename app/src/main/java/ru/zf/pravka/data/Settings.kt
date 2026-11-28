@@ -76,6 +76,10 @@ class Settings(private val context: Context) {
         private val KEY_SPEECH_FINAL_NOTE = stringPreferencesKey("speech_final_note")
         private val KEY_SPEECH_LIVE = stringPreferencesKey("speech_live")
         private val KEY_SPEECH_LIVE_NOTE = stringPreferencesKey("speech_live_note")
+        private val KEY_SPEECH_FINAL_PAUSE = longPreferencesKey("speech_final_pause_until")
+        private val KEY_SPEECH_FINAL_PAUSE_LEN = longPreferencesKey("speech_final_pause_len")
+        private val KEY_SPEECH_LIVE_PAUSE = longPreferencesKey("speech_live_pause_until")
+        private val KEY_SPEECH_LIVE_PAUSE_LEN = longPreferencesKey("speech_live_pause_len")
         private val KEY_READY_CHIME = stringPreferencesKey("ready_chime")
         private val KEY_CHIME_AFTER_START = longPreferencesKey("chime_after_start_ms")
         private val KEY_NET_PROBE = booleanPreferencesKey("net_probe")
@@ -426,12 +430,37 @@ class Settings(private val context: Context) {
     /** Почему настройка последний раз переключилась сама (пусто — руками или ни разу). */
     val speechFinalNoteFlow = context.dataStore.data.map { it[KEY_SPEECH_FINAL_NOTE].orEmpty() }
 
-    /** Выбор итога; [note] — почему, если переключила автоматика (руками — пусто, прежняя причина стирается). */
+    /**
+     * Выбор итога руками; [note] — почему (руками — пусто, прежняя причина стирается). Пауза
+     * сторожа снимается: владелец выбрал сам.
+     */
     suspend fun setSpeechFinal(value: String, note: String = "") {
         context.dataStore.edit {
             it[KEY_SPEECH_FINAL] = value
             it[KEY_SPEECH_FINAL_NOTE] = note
+            it[KEY_SPEECH_FINAL_PAUSE] = 0L
         }
+    }
+
+    /**
+     * Пауза сторожа итога (`PcAsr.Pause`, 28.11.2026): до какого мига итог от Google, хотя выбран
+     * комп, и какой длины была пауза (следующая подряд — вдвое длиннее).
+     */
+    val speechFinalPauseFlow = context.dataStore.data.map {
+        ru.zf.pravka.core.PcAsr.Pause(it[KEY_SPEECH_FINAL_PAUSE] ?: 0L, it[KEY_SPEECH_FINAL_PAUSE_LEN] ?: 0L)
+    }
+
+    suspend fun setSpeechFinalPause(pause: ru.zf.pravka.core.PcAsr.Pause, note: String) {
+        context.dataStore.edit {
+            it[KEY_SPEECH_FINAL_PAUSE] = pause.until
+            it[KEY_SPEECH_FINAL_PAUSE_LEN] = pause.len
+            it[KEY_SPEECH_FINAL_NOTE] = note
+        }
+    }
+
+    /** «Вернуть сейчас»: пауза сторожа итога снята, следующий тейк — снова комп. */
+    suspend fun clearSpeechFinalPause() {
+        context.dataStore.edit { it[KEY_SPEECH_FINAL_PAUSE] = 0L }
     }
 
     /**
@@ -447,6 +476,46 @@ class Settings(private val context: Context) {
         context.dataStore.edit {
             it[KEY_SPEECH_LIVE] = value
             it[KEY_SPEECH_LIVE_NOTE] = note
+            it[KEY_SPEECH_LIVE_PAUSE] = 0L
+        }
+    }
+
+    /** Пауза сторожа строки — как у итога (`PcAsr.Pause`). */
+    val speechLivePauseFlow = context.dataStore.data.map {
+        ru.zf.pravka.core.PcAsr.Pause(it[KEY_SPEECH_LIVE_PAUSE] ?: 0L, it[KEY_SPEECH_LIVE_PAUSE_LEN] ?: 0L)
+    }
+
+    suspend fun setSpeechLivePause(pause: ru.zf.pravka.core.PcAsr.Pause, note: String) {
+        context.dataStore.edit {
+            it[KEY_SPEECH_LIVE_PAUSE] = pause.until
+            it[KEY_SPEECH_LIVE_PAUSE_LEN] = pause.len
+            it[KEY_SPEECH_LIVE_NOTE] = note
+        }
+    }
+
+    suspend fun clearSpeechLivePause() {
+        context.dataStore.edit { it[KEY_SPEECH_LIVE_PAUSE] = 0L }
+    }
+
+    /**
+     * Раньше сторож переписывал выбор на Google насовсем (до 28.11.2026). Такой залипший выбор —
+     * причина в записке со словами «переключён(а) на Google» — снова «Компьютер»: владелец его не
+     * менял, это делала автоматика. Выбор Google руками (записка пустая) не трогается.
+     */
+    suspend fun unstickSpeechAutoFlips() {
+        context.dataStore.edit {
+            if (it[KEY_SPEECH_FINAL] == ru.zf.pravka.core.PcAsr.FINAL_GOOGLE &&
+                it[KEY_SPEECH_FINAL_NOTE].orEmpty().contains("переключён на Google")
+            ) {
+                it[KEY_SPEECH_FINAL] = ru.zf.pravka.core.PcAsr.FINAL_PC
+                it[KEY_SPEECH_FINAL_NOTE] = ""
+            }
+            if (it[KEY_SPEECH_LIVE] == ru.zf.pravka.core.PcAsr.FINAL_GOOGLE &&
+                it[KEY_SPEECH_LIVE_NOTE].orEmpty().contains("переключена на Google")
+            ) {
+                it[KEY_SPEECH_LIVE] = ru.zf.pravka.core.PcAsr.FINAL_PC
+                it[KEY_SPEECH_LIVE_NOTE] = ""
+            }
         }
     }
 
