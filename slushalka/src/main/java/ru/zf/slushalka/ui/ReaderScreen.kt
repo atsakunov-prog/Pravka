@@ -1186,7 +1186,13 @@ fun ReaderScreen(
                                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                             ) {
                                 TextButton(onClick = { app.readAloud.skip(-1) }) { Text("‹ абзац", color = palette.fg) }
-                                PlayPauseButton(speech.speaking, size = 46.dp) { app.readAloud.playPause() }
+                                PlayPauseButton(speech.speaking, size = 46.dp) {
+                                    // На паузе дочитал глазами дальше (28.11.2026: «поставить на паузу и
+                                    // сразу продолжить там читать») - голос продолжает с этой страницы, а не
+                                    // возвращает назад, к фразе, на которой замолчал.
+                                    if (!speech.speaking && !visible(speech.charOffset)) app.readAloud.start(bk, t, readPlace())
+                                    else app.readAloud.playPause()
+                                }
                                 TextButton(onClick = { app.readAloud.skip(+1) }) { Text("абзац ›", color = palette.fg) }
                                 Spacer(Modifier.weight(1f))
                                 SpeedButton(speech.rate, size = 40.dp) { showRate = true }

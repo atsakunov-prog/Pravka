@@ -45,8 +45,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 class ServerVoice(private val settings: Settings) {
 
     interface Listener {
-        /** Слышно абзац [item] (номер в отданном списке), знаки [from]..[to] внутри его текста. */
-        fun onPlaying(item: Int, from: Int, to: Int)
+        /**
+         * Слышно абзац [item] (номер в отданном списке), кусок - знаки [from]..[to] внутри его текста,
+         * прозвучала доля [done] куска (0..1, по времени: сервер не знает, где в куске какое слово,
+         * но речь ровная - фраза по доле угадывается точно). Зовётся раз в тик, пока доля растёт.
+         */
+        fun onPlaying(item: Int, from: Int, to: Int, done: Float)
         fun onFinished()
         /** [retry] - сбой связи: стоит начать заново с того же места; иначе - читать другим голосом. */
         fun onFailed(message: String, retry: Boolean)
@@ -159,6 +163,7 @@ class ServerVoice(private val settings: Settings) {
         var sent = 0                    // абзацев отдано серверу
         @Volatile var playingItem = 0
         var lastShown: Mark? = null
+        var lastDone = 0f
         var preparing = true
 
         fun begin() {
@@ -317,11 +322,17 @@ class ServerVoice(private val settings: Settings) {
             track = t
             runCatching { t.playbackParams = PlaybackParams().setSpeed(rate).setPitch(1f) }
             var playing = false
+            var last: Packet? = null
             while (!dead.get()) {
                 val pk = queue.take()
                 if (pk === POISON) break
                 queuedSec -= pk.pcm.size / BYTES_PER_SEC
-                synchronized(marks) { marks.add(Mark(framesWritten, pk.item, pk.c0, pk.c1)) }
+                // Метка - на начало куска, а не каждого пакета: кусок идёт несколькими пакетами, и доля
+                // прозвучавшего считается от его начала до начала следующего.
+                if (last == null || last.item != pk.item || last.c0 != pk.c0) {
+                    synchronized(marks) { marks.add(Mark(framesWritten, pk.item, pk.c0, pk.c1)) }
+                }
+                last = pk
                 var off = 0
                 while (off < pk.pcm.size && !dead.get()) {
                     val n = t.write(pk.pcm, off, pk.pcm.size - off)
@@ -344,10 +355,12 @@ class ServerVoice(private val settings: Settings) {
                 if (dead.get()) return
                 val t = track
                 val head = t?.let { runCatching { it.playbackHeadPosition.toLong() and 0xffffffffL }.getOrNull() } ?: 0L
+                var next: Long? = null
                 val m = synchronized(marks) {
-                    // старое уже прозвучало - список не растёт бесконечно
-                    while (marks.size > 2 && marks[1].frame <= head) marks.removeAt(0)
-                    marks.lastOrNull { it.frame <= head }
+                    // прозвучавшие куски - прочь, список не растёт бесконечно
+                    while (marks.size > 1 && marks[1].frame <= head) marks.removeAt(0)
+                    next = marks.getOrNull(1)?.frame
+                    marks.firstOrNull()?.takeIf { it.frame <= head }
                 }
                 if (m != null && head > 0) {
                     if (preparing) {
@@ -355,9 +368,14 @@ class ServerVoice(private val settings: Settings) {
                         listener.onPreparing(false)
                     }
                     playingItem = m.item
-                    if (m !== lastShown) {
+                    // Конец куска - начало следующего; следующего ещё нет - прикидка по 15 знаков в секунду.
+                    val end = next ?: if (endReceived && writerDone) framesWritten
+                        else m.frame + ((m.c1 - m.c0).coerceAtLeast(1) / 15.0 * RATE).toLong()
+                    val done = ((head - m.frame).toFloat() / (end - m.frame).coerceAtLeast(1)).coerceIn(0f, 1f)
+                    if (m !== lastShown || done - lastDone >= 0.02f) {
                         lastShown = m
-                        listener.onPlaying(m.item, m.c0, m.c1)
+                        lastDone = done
+                        listener.onPlaying(m.item, m.c0, m.c1, done)
                     }
                 }
                 if (endReceived && writerDone && head >= framesWritten) {

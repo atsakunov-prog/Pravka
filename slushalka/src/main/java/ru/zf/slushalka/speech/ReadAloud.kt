@@ -292,7 +292,7 @@ class ReadAloud(private val app: SlushalkaApp) {
             items = { i -> if (i == 0) "Здравствуйте! Я буду читать вам книги, когда у них нет записи." else null },
             rate = _state.value.rate,
             listener = object : ServerVoice.Listener {
-                override fun onPlaying(item: Int, from: Int, to: Int) = Unit
+                override fun onPlaying(item: Int, from: Int, to: Int, done: Float) = Unit
                 override fun onFinished() = Unit
                 override fun onFailed(message: String, retry: Boolean) {
                     _state.value = _state.value.copy(error = "Голос сервера: $message")
@@ -369,6 +369,12 @@ class ReadAloud(private val app: SlushalkaApp) {
             scheduleRelease(PAUSED_HOLD_MS)
         }
         _state.value = s.copy(speaking = false, preparing = false)
+        // Пауза - место ровно на этой фразе: дальше читают глазами отсюда или
+        // открывают книгу на другом устройстве.
+        if (s.bookId != null) {
+            val block = pieces.getOrNull(current.coerceAtLeast(0))?.block ?: lastSavedBlock
+            savePlace(s.charOffset, block, force = true)
+        }
         app.journal.stopped(s.charOffset.toLong())
     }
 
@@ -502,12 +508,13 @@ class ReadAloud(private val app: SlushalkaApp) {
             chapter = t.chapterAt(piece.start)?.title.orEmpty(),
         )
         val base = index
+        serverChunkAt = -1
         server.start(
             items = { i -> pieceAt(base + i)?.text },
             rate = _state.value.rate,
             listener = object : ServerVoice.Listener {
-                override fun onPlaying(item: Int, from: Int, to: Int) {
-                    if (gen == generation) serverPlaying(base + item, from, to)
+                override fun onPlaying(item: Int, from: Int, to: Int, done: Float) {
+                    if (gen == generation) serverPlaying(base + item, from, to, done)
                 }
 
                 override fun onFinished() {
@@ -525,7 +532,10 @@ class ReadAloud(private val app: SlushalkaApp) {
         )
     }
 
-    private fun serverPlaying(index: Int, from: Int, to: Int) {
+    /** Начало куска сервера, который звучит: новый кусок - строка в журнал подходов. */
+    private var serverChunkAt = -1
+
+    private fun serverPlaying(index: Int, from: Int, to: Int, done: Float) {
         val t = text ?: return
         val piece = pieceAt(index) ?: return
         // Сервер считает знаки по-питоновски (кодовыми точками), строка Kotlin - UTF-16.
@@ -535,16 +545,41 @@ class ReadAloud(private val app: SlushalkaApp) {
         val b = at(to).coerceAtLeast(a)
         current = index
         serverRetries = 0
-        _state.value = _state.value.copy(
-            speaking = true, preparing = false,
-            charOffset = a, range = a..b,
-            chapter = t.chapterAt(a)?.title.orEmpty(),
-        )
-        if (piece.block != lastSavedBlock) {
-            lastSavedBlock = piece.block
-            app.state.saveReadChar(piece.start)
+        // Кусок сервера - до 260 знаков, иногда через край страницы. Подсветка, листание и место -
+        // по фразе внутри него: где она, угадывается по доле прозвучавшего (речь ровная).
+        val here = (a + (done * (b - a)).toInt()).coerceIn(a, (b - 1).coerceAtLeast(a))
+        val sentence = t.sentenceAt(here)
+        val from0 = sentence.first.coerceIn(a, b)
+        val to0 = sentence.last.coerceIn(from0, b)
+        val s = _state.value
+        if (s.charOffset != from0 || s.range != from0..to0 || !s.speaking || s.preparing) {
+            _state.value = s.copy(
+                speaking = true, preparing = false,
+                charOffset = from0, range = from0..to0,
+                chapter = t.chapterAt(from0)?.title.orEmpty(),
+            )
+            savePlace(from0, piece.block)
         }
-        _state.value.bookId?.let { app.journal.aloud(it, a) }
+        if (a != serverChunkAt) {
+            serverChunkAt = a
+            _state.value.bookId?.let { app.journal.aloud(it, a) }
+        }
+    }
+
+    /** Когда место последний раз ушло на диск. */
+    private var lastSaveAt = 0L
+
+    /**
+     * Место чтения - как у читалки и плеера: тот же «прочитано до», те же места
+     * на других устройствах. Пишется на новом абзаце и на новой фразе не чаще
+     * раза в 15 секунд (чаще диску и синхронизации незачем), на паузе - сразу.
+     */
+    private fun savePlace(at: Int, block: Int, force: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        if (!force && block == lastSavedBlock && now - lastSaveAt < SAVE_EVERY_MS) return
+        lastSavedBlock = block
+        lastSaveAt = now
+        app.state.saveReadChar(at)
     }
 
     private fun serverFailed(message: String, retry: Boolean) {
@@ -638,12 +673,9 @@ class ReadAloud(private val app: SlushalkaApp) {
             range = piece.start..piece.end,
             chapter = t.chapterAt(piece.start)?.title.orEmpty(),
         )
-        // Место чтения - на каждом новом абзаце, не на каждой фразе: писать
-        // позиции на диск чаще раза в несколько секунд незачем.
-        if (piece.block != lastSavedBlock) {
-            lastSavedBlock = piece.block
-            app.state.saveReadChar(piece.start)
-        }
+        // Место чтения - на каждом новом абзаце, внутри абзаца - по фразам, не
+        // чаще раза в 15 секунд (savePlace).
+        savePlace(piece.start, piece.block)
         // В журнал подходов - каждый кусок: из шага между ними считаются
         // прочитанные знаки, а время идёт от пуска до паузы.
         _state.value.bookId?.let { app.journal.aloud(it, piece.start) }
@@ -660,10 +692,12 @@ class ReadAloud(private val app: SlushalkaApp) {
         // Подсвечивается фраза, а не слово: бегущее по строке слово отвлекает,
         // а фраза спокойно показывает, где чтец.
         val sentence = t.sentenceAt(at)
+        val from = sentence.first.coerceIn(piece.start, piece.end)
         _state.value = _state.value.copy(
-            charOffset = sentence.first.coerceIn(piece.start, piece.end),
+            charOffset = from,
             range = sentence.first.coerceAtLeast(piece.start)..sentence.last.coerceAtMost(piece.end),
         )
+        savePlace(from, piece.block)
     }
 
     private fun done(gen: Int, index: Int) {
@@ -793,6 +827,9 @@ class ReadAloud(private val app: SlushalkaApp) {
 
     private companion object {
         val SENTENCE_END = charArrayOf('.', '!', '?', '…', ';')
+
+        /** Место чтения внутри абзаца - не чаще этого (новый абзац и пауза - сразу). */
+        const val SAVE_EVERY_MS = 15_000L
 
         /** После «Стоп» движок держится полминуты: вдруг сейчас же включат снова. */
         const val STOPPED_HOLD_MS = 30_000L
